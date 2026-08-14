@@ -115,3 +115,11 @@ Stage 4 foundation: resource registry, Agent Assembly V2, worker deployment and 
 - Provider lifecycle outcomes now have a durable, safe record: validation type, status, bounded/redacted result, elapsed time and actor. API keys, authorization values, secrets and tokens are replaced before persistence.
 - Dify Tool versions can now be explicitly validated and queried through validation-run APIs. Generic Dify publication is gated on a successful `VALIDATE` outcome; product and compatibility onboarding commands persist their validated outcome before publishing.
 - Verification: Python compileall and focused validation/Dify/registry/workbench suite pass (14 tests).
+
+# 2026-08-14 — V1.5 Iteration C (in progress; local only)
+
+- Added `platform_resource_external_binding` with tenant RLS and migration `0025_bindings_secret_rotation`. A provider object's stable external identity can now map to exactly one managed platform resource per connection.
+- MCP discovered Tool registration now creates this binding. The Console/API can query the connection's managed bindings without exposing credentials, enabling a later Discover screen to distinguish available, managed, changed and missing objects.
+- Secret Vault records now expose only safe lifecycle metadata: active/disabled status, last-used time and rotation/disable times. The same `vault://secret_id` is retained on rotation; new credential material replaces only the encrypted value/fingerprint. Disabled secrets cannot resolve at runtime.
+- Added local-only API endpoints for Secret rotation and disable. No server deployment was performed for this batch, per the requested consolidated-release workflow.
+- Verification: focused External Binding, MCP, Secret Vault, validation and registry suite passes (12 tests).

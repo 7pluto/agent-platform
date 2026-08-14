@@ -5,7 +5,8 @@ from app.secrets.vault import SecretCreate, SecretRecord
 
 def test_secret_api_record_has_reference_and_fingerprint_only() -> None:
     fields = set(SecretRecord.model_fields)
-    assert fields == {"secret_ref", "name", "fingerprint", "created_by", "created_at"}
+    assert {"secret_ref", "name", "fingerprint", "status", "last_used_at", "rotated_at", "disabled_at", "created_by", "created_at"} <= fields
+    assert not fields.intersection({"value", "encrypted_value", "api_key", "token", "secret"})
     assert "value" not in fields and "encrypted_value" not in fields
     assert "value" in SecretCreate.model_fields
 

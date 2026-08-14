@@ -6,15 +6,17 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from urllib.parse import urlsplit
 
-from app.api.dependencies import require_platform_admin
+from app.api.dependencies import require_platform_admin, require_platform_admin_read
 from app.iam.models import Principal
 from app.mcp.service import mcp_auth_headers, mcp_client
 from app.resources.registry_factory import get_resource_registry
-from app.resources.registry_models import ResourceDefinitionCreate, ResourceType, ResourceVersionCreate, ResourceVersionRecord
+from app.resources.registry_models import ResourceDefinitionCreate, ResourceExternalBindingRecord, ResourceType, ResourceVersionCreate, ResourceVersionRecord
 from app.resources.registry_store import ResourceRegistryStore
+from app.resources.bindings import get_external_binding_service
 from app.secrets.vault import get_secret_vault
 
 router = APIRouter(tags=["mcp"])
+bindings = get_external_binding_service()
 
 
 class McpDiscoveredTool(BaseModel):
@@ -92,5 +94,18 @@ async def register_discovered_tool(request: RegisterDiscoveredToolRequest, princ
         from app.core.errors import ApiError
         raise ApiError(409, "MCP_TOOL_NOT_DISCOVERED", "tool must be discovered before registration")
     definition = await registry.create_definition(ResourceDefinitionCreate(resource_type=ResourceType.TOOL, slug=request.slug, display_name=request.display_name, description=request.description or match.get("description"), draft_config={"kind": "MCP", "connection_version_id": str(request.connection_version_id), "tool_name": request.tool_name, "input_schema": match.get("inputSchema", request.input_schema)}), principal)
+    await bindings.register_discovered(
+        provider="MCP", connection_resource_id=connection.resource_id, external_type="TOOL",
+        external_id=request.tool_name, resource_id=definition.resource_id, principal=principal,
+    )
     version = await registry.create_version(definition.resource_id, ResourceVersionCreate(), principal)
     return await registry.publish_version(version.resource_version_id, principal)
+
+
+@router.get("/mcp-connections/{resource_version_id}/bindings", response_model=list[ResourceExternalBindingRecord])
+async def list_mcp_bindings(resource_version_id: UUID, principal: Principal = Depends(require_platform_admin_read)) -> list[ResourceExternalBindingRecord]:
+    connection = await get_resource_registry().get_version(resource_version_id, principal, published=True)
+    if connection.resource_type != ResourceType.MCP_CONNECTION:
+        from app.core.errors import ApiError
+        raise ApiError(422, "RESOURCE_TYPE_MISMATCH", "resource version is not an MCP connection")
+    return await bindings.list_for_connection(connection.resource_id, principal)

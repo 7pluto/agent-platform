@@ -81,3 +81,22 @@ class ResourceValidationRunRecord(BaseModel):
     latency_ms: int | None = Field(default=None, ge=0)
     created_by: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class ExternalBindingStatus(StrEnum):
+    MANAGED = "MANAGED"
+    CHANGED = "CHANGED"
+    MISSING = "MISSING"
+
+
+class ResourceExternalBindingRecord(BaseModel):
+    binding_id: UUID = Field(default_factory=uuid4)
+    tenant_id: str
+    provider: str
+    connection_resource_id: UUID
+    external_type: str
+    external_id: str
+    resource_id: UUID
+    status: ExternalBindingStatus = ExternalBindingStatus.MANAGED
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

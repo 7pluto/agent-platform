@@ -433,8 +433,37 @@ class SecretVaultRow(Base):
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     encrypted_value: Mapped[str] = mapped_column(Text, nullable=False)
     fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="ACTIVE")
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_by: Mapped[str] = mapped_column(String(128), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ResourceExternalBindingRow(Base):
+    """Stable mapping from a discovered provider object to one platform resource."""
+
+    __tablename__ = "platform_resource_external_binding"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "provider", "connection_resource_id", "external_type", "external_id", name="uq_platform_resource_external_binding"),
+        Index("ix_platform_resource_external_binding_tenant_connection", "tenant_id", "connection_resource_id"),
+    )
+
+    binding_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    connection_resource_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("platform_resource_definition.resource_id", ondelete="CASCADE"), nullable=False
+    )
+    external_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    external_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    resource_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("platform_resource_definition.resource_id", ondelete="CASCADE"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="MANAGED")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class MemoryItemRow(Base):
