@@ -13,7 +13,7 @@ import AgentModuleBoard from './components/AgentModuleBoard.vue'
 type Space = 'workspace' | 'console'
 type WorkspaceView = 'agents' | 'chat'
 type ConsoleView = 'overview' | 'agents' | 'resources' | 'knowledge' | 'runs' | 'permissions'
-type ResourceType = 'ALL' | 'MODEL' | 'PROMPT' | 'SKILL' | 'TOOL' | 'MCP_CONNECTION' | 'KNOWLEDGE' | 'MEMORY_POLICY'
+type ResourceType = 'ALL' | 'MODEL' | 'PROMPT' | 'SKILL' | 'TOOL' | 'MCP_CONNECTION' | 'KNOWLEDGE_CONNECTION' | 'KNOWLEDGE' | 'MEMORY_POLICY'
 
 const router = useRouter()
 const route = useRoute()
@@ -80,6 +80,7 @@ const resourceForm = ref({
   embeddingModelVersionId: '', ttlDays: 30, maxItems: 50, categories: 'preference',
   modelBaseUrl: 'https://api.siliconflow.cn/v1', modelName: '', modelApiKey: '', modelMode: 'CHAT',
   mcpEndpoint: '', mcpApiKey: '', mcpTimeout: 10,
+  ragflowEndpoint: '', ragflowApiKey: '', ragflowTimeout: 20,
   httpEndpoint: '', httpPath: '/', httpMethod: 'GET' as 'GET' | 'POST', httpToolName: '', httpApiKey: '', httpTimeout: 15,
   httpInputSchema: '{"type":"object","properties":{}}', httpQueryTemplate: '{}', httpBodyTemplate: '', httpTestArguments: '{}',
   difyBaseUrl: '', difyApiKey: '', difyFlowType: 'CHATFLOW', difyToolName: '', difyTimeout: 90,
@@ -537,6 +538,14 @@ async function createTypedResource() {
       const mcpVersion = await api.createMcpConnection({ slug, display_name: form.displayName.trim(), endpoint: form.mcpEndpoint.trim(), timeout_seconds: form.mcpTimeout, api_key: form.mcpApiKey || null, auth_header: 'Authorization', auth_scheme: 'Bearer' }, csrf.value)
       await saveNewResourceDescriptor(mcpVersion.resource_id, 'MCP')
       await publishResourceAudience('MCP_CONNECTION', mcpVersion.resource_version_id)
+      resourceComposerOpen.value = false; await Promise.all([loadResources(), loadCatalog()]); return
+    }
+    if (form.type === 'KNOWLEDGE_CONNECTION') {
+      if (!form.ragflowEndpoint.trim() || !form.ragflowApiKey.trim()) throw new Error('RAGFlow 连接需要 Endpoint 和 API Key。')
+      const connection = await api.createRagflowConnection({ slug, display_name: form.displayName.trim(), endpoint: form.ragflowEndpoint.trim(), api_key: form.ragflowApiKey, timeout_seconds: form.ragflowTimeout }, csrf.value)
+      form.ragflowApiKey = ''
+      await saveNewResourceDescriptor(connection.resource_id, 'RAGFLOW')
+      await publishResourceAudience('KNOWLEDGE_CONNECTION', connection.resource_version_id)
       resourceComposerOpen.value = false; await Promise.all([loadResources(), loadCatalog()]); return
     }
     if (form.type === 'TOOL' && form.toolMode === 'HTTP') {
@@ -1007,7 +1016,7 @@ onMounted(loadSession)
 <div class="resource-type-tiles" v-if="resourceCategory === 'CAPABILITY'">
 <button v-for="item in [{v:'MODEL',n:'模型',d:'对话推理或 Embedding'},{v:'PROMPT',n:'提示词',d:'角色、边界和回答规则'},{v:'SKILL',n:'技能',d:'业务指令 + Tool/Knowledge 依赖'},{v:'TOOL',n:'原生工具',d:'平台受控实现'},{v:'KNOWLEDGE',n:'知识库',d:'文档、索引和检索'},{v:'MEMORY_POLICY',n:'记忆策略',d:'长期记忆读写边界'}]" :key="item.v" :class="{ selected: resourceForm.type === item.v }" @click="resourceForm.type = item.v"><b>{{ item.n }}</b><small>{{ item.d }}</small></button>
 </div>
-<div class="resource-type-tiles" v-else-if="resourceCategory === 'CONNECTOR'"><button class="selected"><b>MCP Connection</b><small>连接、发现后注册 MCP Tool</small></button></div>
+<div class="resource-type-tiles" v-else-if="resourceCategory === 'CONNECTOR'"><button :class="{ selected: resourceForm.type === 'MCP_CONNECTION' }" @click="resourceForm.type = 'MCP_CONNECTION'"><b>MCP Connection</b><small>连接、发现后注册 MCP Tool</small></button><button :class="{ selected: resourceForm.type === 'KNOWLEDGE_CONNECTION' }" @click="resourceForm.type = 'KNOWLEDGE_CONNECTION'"><b>RAGFlow Connection</b><small>发现 Dataset 后纳管为 Knowledge</small></button></div>
 <div class="resource-type-tiles" v-else><button class="selected"><b>Dify Flow Tool</b><small>业务应用登记 + 参数发现 + RuoYi 授权 + Tool 发布</small></button></div>
 </div>
 <div v-else-if="resourceWizardStep === 2" class="resource-form semantics-form">
@@ -1087,6 +1096,11 @@ onMounted(loadSession)
 <label>超时（秒）<input v-model.number="resourceForm.mcpTimeout" type="number" min="1" max="60" /></label>
 <label>API Key（可选）<input v-model="resourceForm.mcpApiKey" type="password" autocomplete="new-password" placeholder="Bearer token" /></label>
 </template>
+<template v-else-if="resourceForm.type === 'KNOWLEDGE_CONNECTION'">
+<label class="wide-field">RAGFlow Endpoint<input v-model="resourceForm.ragflowEndpoint" placeholder="https://ragflow.example.com" /></label>
+<label>调用超时（秒）<input v-model.number="resourceForm.ragflowTimeout" type="number" min="1" max="60" /></label>
+<label class="wide-field">RAGFlow API Key<input v-model="resourceForm.ragflowApiKey" type="password" autocomplete="new-password" placeholder="仅本次提交，后端保存至 Vault" /></label>
+</template>
 <template v-else-if="resourceForm.type === 'KNOWLEDGE'">
 <label>Embedding 模型版本<select v-model="resourceForm.embeddingModelVersionId">
 <option value="">请选择已发布 Embedding 模型</option>
@@ -1132,6 +1146,7 @@ onMounted(loadSession)
 <option value="SKILL">技能</option>
 <option value="TOOL">工具 / Dify</option>
 <option value="MCP_CONNECTION">MCP 连接</option>
+<option value="KNOWLEDGE_CONNECTION">RAGFlow 连接</option>
 <option value="KNOWLEDGE">知识库</option>
 <option value="MEMORY_POLICY">记忆策略</option>
 </select>

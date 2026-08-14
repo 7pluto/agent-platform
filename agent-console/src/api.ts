@@ -406,6 +406,9 @@ export const api = {
   createMcpConnection: (payload: { slug: string; display_name: string; endpoint: string; timeout_seconds: number; api_key: string | null; auth_header: string; auth_scheme: string }, csrf: string) => request<RegistryResourceVersion>('/api/v1/mcp-connections', {
     method: 'POST', headers: { 'X-CSRF-Token': csrf }, body: JSON.stringify(payload),
   }),
+  createRagflowConnection: (payload: { slug: string; display_name: string; endpoint: string; api_key: string; timeout_seconds: number }, csrf: string) => request<RegistryResourceVersion>('/api/v1/ragflow-connections', {
+    method: 'POST', headers: { 'X-CSRF-Token': csrf }, body: JSON.stringify(payload),
+  }),
   createHttpTool: (payload: {
     slug: string; display_name: string; description: string; tool_name: string; endpoint: string; path: string; method: 'GET' | 'POST'
     input_schema: Record<string, unknown>; query_template?: Record<string, unknown> | unknown[]; body_template?: Record<string, unknown> | unknown[]

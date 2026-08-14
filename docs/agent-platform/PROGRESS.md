@@ -175,6 +175,12 @@ Stage 4 foundation: resource registry, Agent Assembly V2, worker deployment and 
 - Remote responses are normalized into the common Knowledge hit model; unsupported/malformed response shapes fail safely. The same Runtime path now handles local and remote Knowledge without provider-specific conditionals.
 - Verification: Python compileall and focused Knowledge Provider/resource/Runtime tests pass (14 passed). No deployment or GitHub push was performed.
 
+# 2026-08-14 V1.5 RAGFlow Connection onboarding (local only)
+
+- Added RAGFlow Connection as a first-class connector choice in the Resource Center’s add-resource wizard. The form accepts only endpoint, timeout and one-time API key input; credentials are sent once to the tenant Vault and never rendered again.
+- New connections use the same descriptor and RuoYi publication-scope flow as every other resource. The next Knowledge Center iteration will expose Dataset discovery cards and the register-as-Knowledge action.
+- Verification: Vue type check and production build pass. No deployment or GitHub push was performed.
+
 # 2026-08-14 V1.5 RAGFlow Knowledge connection (local only)
 
 - Added `KNOWLEDGE_CONNECTION` for RAGFlow. The connection keeps its endpoint allowlist and one Vault-backed API-key reference; Dataset discovery uses the supported RAGFlow dataset endpoint and never exposes a Dataset ID to an Agent model.
