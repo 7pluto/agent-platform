@@ -25,6 +25,7 @@ from app.resources.registry_models import (
 )
 from app.resources.validation import get_resource_validation_service
 from app.runtime.dify_flow import DifyFlowClient
+from app.runtime.http_tool import http_tool_client
 from app.resources.providers.registry import provider_registry
 from app.secrets.vault import get_secret_vault
 
@@ -68,6 +69,31 @@ class DifyApplicationPublishResponse(BaseModel):
     resource_version: ResourceVersionRecord
     connection_test: dict
     grants_created: int
+
+
+class HttpToolCreate(BaseModel):
+    """Create a constrained API capability, not a user-programmable proxy."""
+
+    slug: str = Field(pattern=r"^[a-z][a-z0-9-]{2,63}$")
+    display_name: str = Field(min_length=1, max_length=128)
+    description: str = Field(default="调用受控业务 HTTP 接口", max_length=4_000)
+    tool_name: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_]{1,63}$")
+    endpoint: str
+    path: str = Field(default="/")
+    method: str = Field(default="GET", pattern=r"^(GET|POST)$")
+    input_schema: dict = Field(default_factory=lambda: {"type": "object", "properties": {}})
+    query_template: dict | list | None = None
+    body_template: dict | list | None = None
+    timeout_seconds: float = Field(default=15, ge=0.1, le=60)
+    api_key: str | None = Field(default=None, min_length=1, max_length=32_768)
+    auth_header: str = Field(default="Authorization", min_length=1, max_length=128)
+    auth_scheme: str = Field(default="Bearer", max_length=128)
+    test_arguments: dict = Field(default_factory=dict)
+
+
+class HttpToolPublishResponse(BaseModel):
+    resource_version: ResourceVersionRecord
+    test_result: dict
 
 
 async def _validate_dify_version(
@@ -292,6 +318,74 @@ async def create_dify_flow_tool(request: DifyFlowToolCreate, principal: Principa
         "resource_id": str(published.resource_id), "secret_ref": secret.secret_ref, "fingerprint": secret.fingerprint,
     })
     return published
+
+
+@router.post("/http-tools", response_model=HttpToolPublishResponse, status_code=201)
+async def create_http_tool(request: HttpToolCreate, principal: Principal = Depends(require_platform_admin)) -> HttpToolPublishResponse:
+    """Register and validate one fixed HTTP capability before publication."""
+    host = urlsplit(request.endpoint).hostname
+    if not host:
+        raise ApiError(422, "INVALID_HTTP_TOOL_CONFIG", "endpoint must contain a hostname")
+    config: dict = {
+        "kind": "HTTP",
+        "tool_name": request.tool_name,
+        "description": request.description,
+        "endpoint": request.endpoint.rstrip("/"),
+        "path": request.path,
+        "method": request.method,
+        "input_schema": request.input_schema,
+        "timeout_seconds": request.timeout_seconds,
+        "egress_allowlist": [host],
+    }
+    if request.query_template is not None:
+        config["query_template"] = request.query_template
+    if request.body_template is not None:
+        config["body_template"] = request.body_template
+    if request.api_key:
+        secret = await get_secret_vault().create(f"HTTP Tool: {request.display_name}", request.api_key, principal)
+        config.update({"secret_ref": secret.secret_ref, "auth_header": request.auth_header, "auth_scheme": request.auth_scheme})
+
+    # Validate config before persisting any executable version.  The test below
+    # invokes only this fixed endpoint/path and its declared templates.
+    ResourceRegistryStore._validate(ResourceType.TOOL, config)
+    definition = await store.create_definition(ResourceDefinitionCreate(
+        resource_type=ResourceType.TOOL,
+        slug=request.slug,
+        display_name=request.display_name,
+        description=request.description,
+        draft_config=config,
+    ), principal)
+    version = await store.create_version(definition.resource_id, ResourceVersionCreate(config=config), principal)
+    started = perf_counter()
+    try:
+        test_result = await http_tool_client.invoke(config, request.test_arguments, principal.tenant_id, principal.external_user_id)
+    except ApiError as exc:
+        await validation_runs.record(
+            version.resource_version_id,
+            ResourceValidationType.TEST,
+            ResourceValidationStatus.FAILED,
+            {"provider": "HTTP", "code": exc.code, "message": exc.message},
+            principal,
+            round((perf_counter() - started) * 1000),
+        )
+        raise
+    await validation_runs.record(
+        version.resource_version_id,
+        ResourceValidationType.TEST,
+        ResourceValidationStatus.SUCCEEDED,
+        {"provider": "HTTP", "status_code": test_result["status_code"]},
+        principal,
+        round((perf_counter() - started) * 1000),
+    )
+    published = await store.publish_version(version.resource_version_id, principal)
+    await get_governance_store().record_audit(
+        principal,
+        "http_tool.publish",
+        "TOOL",
+        str(published.resource_version_id),
+        {"endpoint_host": host, "method": request.method, "path": request.path},
+    )
+    return HttpToolPublishResponse(resource_version=published, test_result={"status_code": test_result["status_code"]})
 
 
 @router.post("/resources", response_model=ResourceDefinitionRecord, status_code=201)

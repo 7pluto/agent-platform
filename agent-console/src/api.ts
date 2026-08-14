@@ -394,6 +394,13 @@ export const api = {
   createMcpConnection: (payload: { slug: string; display_name: string; endpoint: string; timeout_seconds: number; api_key: string | null; auth_header: string; auth_scheme: string }, csrf: string) => request<RegistryResourceVersion>('/api/v1/mcp-connections', {
     method: 'POST', headers: { 'X-CSRF-Token': csrf }, body: JSON.stringify(payload),
   }),
+  createHttpTool: (payload: {
+    slug: string; display_name: string; description: string; tool_name: string; endpoint: string; path: string; method: 'GET' | 'POST'
+    input_schema: Record<string, unknown>; query_template?: Record<string, unknown> | unknown[]; body_template?: Record<string, unknown> | unknown[]
+    timeout_seconds: number; api_key?: string; auth_header: string; auth_scheme: string; test_arguments: Record<string, unknown>
+  }, csrf: string) => request<{ resource_version: RegistryResourceVersion; test_result: { status_code: number } }>('/api/v1/http-tools', {
+    method: 'POST', headers: { 'X-CSRF-Token': csrf }, body: JSON.stringify(payload),
+  }),
   createResourceGrant: (payload: { subject_type: 'USER' | 'ROLE' | 'DEPT'; subject_id: string; resource_type: string; resource_id: string; actions: string[] }, csrf: string) => request('/api/v1/resource-grants', {
     method: 'POST', headers: { 'X-CSRF-Token': csrf }, body: JSON.stringify({ ...payload, effect: 'ALLOW' }),
   }),

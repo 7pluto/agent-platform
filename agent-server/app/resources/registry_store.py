@@ -109,7 +109,10 @@ class ResourceRegistryStore:
             if config.get("kind") == "DIFY_FLOW":
                 ResourceRegistryStore._validate_dify_flow(config)
                 return
-            raise ApiError(422, "INVALID_TOOL_CONFIG", "tools must be registered NATIVE, discovered MCP, or DIFY_FLOW")
+            if config.get("kind") == "HTTP":
+                ResourceRegistryStore._validate_http_tool(config)
+                return
+            raise ApiError(422, "INVALID_TOOL_CONFIG", "tools must be registered NATIVE, discovered MCP, DIFY_FLOW, or governed HTTP")
         if resource_type == ResourceType.MCP_CONNECTION:
             endpoint = config.get("endpoint")
             if config.get("transport") != "streamable_http" or not isinstance(endpoint, str):
@@ -188,3 +191,44 @@ class ResourceRegistryStore:
         schema = config.get("input_schema", {"type": "object"})
         if not isinstance(schema, dict) or schema.get("type") != "object":
             raise ApiError(422, "INVALID_DIFY_FLOW_CONFIG", "input_schema must be a JSON object schema")
+
+    @staticmethod
+    def _validate_http_tool(config: dict) -> None:
+        name = config.get("tool_name")
+        if not isinstance(name, str) or not name or not name.replace("_", "a").isalnum() or len(name) > 64:
+            raise ApiError(422, "INVALID_HTTP_TOOL_CONFIG", "tool_name must contain letters, numbers, or underscores")
+        endpoint = config.get("endpoint")
+        if not isinstance(endpoint, str):
+            raise ApiError(422, "INVALID_HTTP_TOOL_CONFIG", "endpoint is required")
+        parsed = urlsplit(endpoint)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ApiError(422, "INVALID_HTTP_TOOL_CONFIG", "endpoint must be a clean HTTP(S) base URL without embedded credentials")
+        allowlist = config.get("egress_allowlist")
+        if not isinstance(allowlist, list) or not allowlist or not all(isinstance(host, str) and host.strip() for host in allowlist):
+            raise ApiError(422, "INVALID_HTTP_EGRESS_POLICY", "HTTP Tool requires a non-empty hostname egress_allowlist")
+        allowed = {host.strip().lower().rstrip(".") for host in allowlist}
+        if parsed.hostname.lower().rstrip(".") not in allowed:
+            raise ApiError(422, "HTTP_TOOL_EGRESS_FORBIDDEN", "HTTP Tool endpoint hostname is not allowed")
+        if config.get("method", "GET") not in {"GET", "POST"}:
+            raise ApiError(422, "INVALID_HTTP_TOOL_CONFIG", "HTTP Tool method must be GET or POST")
+        path = config.get("path", "/")
+        if not isinstance(path, str) or not path.startswith("/") or ".." in path or "://" in path or "?" in path or "#" in path:
+            raise ApiError(422, "INVALID_HTTP_TOOL_CONFIG", "HTTP Tool path must be a fixed absolute path")
+        timeout = config.get("timeout_seconds", 15)
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0.1 <= float(timeout) <= 60:
+            raise ApiError(422, "INVALID_HTTP_TOOL_CONFIG", "timeout_seconds must be between 0.1 and 60")
+        schema = config.get("input_schema", {"type": "object"})
+        if not isinstance(schema, dict) or schema.get("type") != "object":
+            raise ApiError(422, "INVALID_HTTP_TOOL_CONFIG", "input_schema must be a JSON object schema")
+        for field in ("query_template", "body_template"):
+            if field in config and not isinstance(config[field], (dict, list)):
+                raise ApiError(422, "INVALID_HTTP_TOOL_CONFIG", f"{field} must be an object or array template")
+        secret_ref = config.get("secret_ref")
+        if secret_ref is not None:
+            if not isinstance(secret_ref, str):
+                raise ApiError(422, "INVALID_SECRET_REF", "HTTP Tool secret_ref must be a reference")
+            validate_secret_ref(secret_ref)
+            header = config.get("auth_header", "Authorization")
+            scheme = config.get("auth_scheme", "Bearer")
+            if not isinstance(header, str) or not header.strip() or not isinstance(scheme, str):
+                raise ApiError(422, "INVALID_HTTP_TOOL_CONFIG", "HTTP Tool auth header and scheme are invalid")

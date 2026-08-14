@@ -137,3 +137,10 @@ Stage 4 foundation: resource registry, Agent Assembly V2, worker deployment and 
 - Added `POST /mcp-tools/register-batch`: administrators select one or more cards from a fresh server-side discovery result and provide only business name, slug and optional description. Tool identity and input schema are always copied from the MCP server; invented names, duplicate selections, duplicate slugs and already-managed external tools are rejected before any resource is created.
 - The original single-tool endpoint remains compatible, but now also ignores client-supplied schemas and uses the freshly discovered MCP schema.
 - Verification: Python compileall plus MCP/provider/external-binding focused tests pass (5 passed). No deployment or GitHub push was performed.
+
+# 2026-08-14 V1.5 governed HTTP Tool (local only)
+
+- Added a declarative HTTP Tool resource and runtime adapter. Its endpoint host, fixed path, GET/POST method, egress allowlist and timeout are immutable versioned configuration. The model can provide only values for declared `{{argument}}` placeholders; it cannot choose a URL, header, command or arbitrary request body.
+- HTTP Tools can optionally resolve an API key only from the tenant Vault. Every product creation performs an invocation test before publishing, records a safe validation outcome, and writes only endpoint host/method/path to the audit record.
+- The Resource Center’s existing add-resource wizard now exposes **Tool type → Governed HTTP Tool** with fixed API fields, input schema, Query/Body templates and test arguments. It uses the same semantic descriptor and RuoYi publication scope as every other Tool.
+- Verification: Python compileall, focused HTTP Tool/resource/runtime tests (14 passed), and Vue production build pass. No deployment or GitHub push was performed.

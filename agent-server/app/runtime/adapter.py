@@ -23,6 +23,7 @@ from app.resources.registry_store import ResourceRegistryStore
 from app.mcp.service import mcp_auth_headers, mcp_client
 from app.runtime.models import ExecutionManifest, RunRecord
 from app.runtime.dify_flow import DifyFlowClient
+from app.runtime.http_tool import http_tool_client
 from app.conversation.store_factory import get_conversation_store
 
 
@@ -388,6 +389,8 @@ class OpenAICompatibleRuntimeAdapter(RuntimeAdapter):
                 runtime_arguments,
                 user_id=f"{context.run.tenant_id}:{context.run.user_id}",
             )
+        if config["kind"] == "HTTP":
+            return await http_tool_client.invoke(config, arguments, context.run.tenant_id, context.run.user_id)
         if config["kind"] == "KNOWLEDGE":
             principal = Principal(provider="runtime", external_user_id=context.run.user_id, external_org_id="runtime", tenant_id=context.run.tenant_id, display_name="Runtime")
             query = str(arguments.get("query") or context.run.message)

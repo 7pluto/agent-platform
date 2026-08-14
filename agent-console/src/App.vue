@@ -71,7 +71,7 @@ const iamDepartments = ref<IamSubject[]>([])
 const iamRoles = ref<IamSubject[]>([])
 const difyPublishResult = ref<{ grants: number; inputs: number; invocationTested: boolean } | null>(null)
 const resourceForm = ref({
-  type: 'PROMPT', displayName: '', slug: '', description: '', template: '', skillMd: '', nativeName: 'echo',
+  type: 'PROMPT', displayName: '', slug: '', description: '', template: '', skillMd: '', nativeName: 'echo', toolMode: 'NATIVE' as 'NATIVE' | 'HTTP',
   oneLineSummary: '', whenToUse: '', whenNotToUse: '', inputSummary: '', outputSummary: '', riskLevel: 'LOW', readOnly: true,
   ownerUserId: '', ownerDeptId: '', tags: '',
   businessLine: '', dataInvolved: '', audience: '', usageScenarios: '', developerUserIds: [] as string[],
@@ -79,6 +79,8 @@ const resourceForm = ref({
   embeddingModelVersionId: '', ttlDays: 30, maxItems: 50, categories: 'preference',
   modelBaseUrl: 'https://api.siliconflow.cn/v1', modelName: '', modelApiKey: '', modelMode: 'CHAT',
   mcpEndpoint: '', mcpApiKey: '', mcpTimeout: 10,
+  httpEndpoint: '', httpPath: '/', httpMethod: 'GET' as 'GET' | 'POST', httpToolName: '', httpApiKey: '', httpTimeout: 15,
+  httpInputSchema: '{"type":"object","properties":{}}', httpQueryTemplate: '{}', httpBodyTemplate: '', httpTestArguments: '{}',
   difyBaseUrl: '', difyApiKey: '', difyFlowType: 'CHATFLOW', difyToolName: '', difyTimeout: 90,
   difyBusinessLine: '', difyDataInvolved: '', difyAudience: '', difyUsageScenarios: '', difyDeveloperUserIds: [] as string[],
   difyOpeningStatement: '', difySuggestedQuestions: '', difyPublicationScope: 'PERSONAL' as 'PERSONAL' | 'OWNER_DEPT' | 'SELECTED_SUBJECTS',
@@ -328,6 +330,9 @@ function nextResourceWizardStep() {
   if (resourceWizardStep.value === 3 && resourceForm.value.type === 'DIFY_FLOW') {
     const message = validateDifyApplication(); if (message) { error.value = message; return }
   }
+  if (resourceWizardStep.value === 3 && resourceForm.value.type === 'TOOL' && resourceForm.value.toolMode === 'HTTP') {
+    const message = validateHttpTool(); if (message) { error.value = message; return }
+  }
   error.value = ''; resourceWizardStep.value = Math.min(4, resourceWizardStep.value + 1)
 }
 async function loadAgents() {
@@ -487,6 +492,25 @@ function resourceDraftConfig() {
   if (form.type === 'MEMORY_POLICY') return { write_mode: 'EXPLICIT', read_enabled: true, write_enabled: true, ttl_days: form.ttlDays, max_items: form.maxItems, allowed_categories: form.categories.split(',').map(item => item.trim()).filter(Boolean) }
   return {}
 }
+function parseJsonValue(value: string, label: string, emptyValue: Record<string, unknown> | unknown[] | undefined = undefined) {
+  if (!value.trim()) return emptyValue
+  try { return JSON.parse(value) as Record<string, unknown> | unknown[] } catch { throw new Error(`${label} 必须是有效 JSON。`) }
+}
+function validateHttpTool() {
+  const form = resourceForm.value
+  if (!form.httpEndpoint.trim() || !form.httpToolName.trim()) return 'HTTP Tool 需要固定 API Endpoint 和 Tool Name。'
+  if (!form.httpPath.startsWith('/')) return 'HTTP Tool 路径必须以 / 开头。'
+  if (!/^[A-Za-z][A-Za-z0-9_]{1,63}$/.test(form.httpToolName.trim())) return 'HTTP Tool Name 必须以字母开头，只能包含字母、数字和下划线。'
+  const input = parseJsonValue(form.httpInputSchema, '输入 Schema')
+  if (!input || Array.isArray(input) || input.type !== 'object') return '输入 Schema 必须是 type 为 object 的 JSON Schema。'
+  const query = parseJsonValue(form.httpQueryTemplate, 'Query 模板', {})
+  const body = parseJsonValue(form.httpBodyTemplate, 'Body 模板')
+  const test = parseJsonValue(form.httpTestArguments, '测试参数', {})
+  if (query && !Array.isArray(query) && typeof query !== 'object') return 'Query 模板必须是对象。'
+  if (body !== undefined && typeof body !== 'object') return 'Body 模板必须是对象或数组。'
+  if (test && (Array.isArray(test) || typeof test !== 'object')) return '测试参数必须是对象。'
+  return ''
+}
 async function createTypedResource() {
   const form = resourceForm.value
   const semanticsError = validateResourceSemantics()
@@ -508,6 +532,23 @@ async function createTypedResource() {
       const mcpVersion = await api.createMcpConnection({ slug, display_name: form.displayName.trim(), endpoint: form.mcpEndpoint.trim(), timeout_seconds: form.mcpTimeout, api_key: form.mcpApiKey || null, auth_header: 'Authorization', auth_scheme: 'Bearer' }, csrf.value)
       await saveNewResourceDescriptor(mcpVersion.resource_id, 'MCP')
       await publishResourceAudience('MCP_CONNECTION', mcpVersion.resource_version_id)
+      resourceComposerOpen.value = false; await Promise.all([loadResources(), loadCatalog()]); return
+    }
+    if (form.type === 'TOOL' && form.toolMode === 'HTTP') {
+      const httpError = validateHttpTool(); if (httpError) throw new Error(httpError)
+      const inputSchema = parseJsonValue(form.httpInputSchema, '输入 Schema') as Record<string, unknown>
+      const queryTemplate = parseJsonValue(form.httpQueryTemplate, 'Query 模板', {})
+      const bodyTemplate = parseJsonValue(form.httpBodyTemplate, 'Body 模板')
+      const testArguments = parseJsonValue(form.httpTestArguments, '测试参数', {}) as Record<string, unknown>
+      const result = await api.createHttpTool({
+        slug, display_name: form.displayName.trim(), description: form.description.trim() || form.oneLineSummary.trim(),
+        tool_name: form.httpToolName.trim(), endpoint: form.httpEndpoint.trim(), path: form.httpPath.trim(), method: form.httpMethod,
+        input_schema: inputSchema, ...(queryTemplate !== undefined ? { query_template: queryTemplate } : {}), ...(bodyTemplate !== undefined ? { body_template: bodyTemplate } : {}),
+        timeout_seconds: form.httpTimeout, ...(form.httpApiKey ? { api_key: form.httpApiKey } : {}), auth_header: 'Authorization', auth_scheme: 'Bearer', test_arguments: testArguments,
+      }, csrf.value)
+      form.httpApiKey = ''
+      await saveNewResourceDescriptor(result.resource_version.resource_id, 'HTTP')
+      await publishResourceAudience('TOOL', result.resource_version.resource_version_id)
       resourceComposerOpen.value = false; await Promise.all([loadResources(), loadCatalog()]); return
     }
     if (form.type === 'DIFY_FLOW') {
@@ -996,12 +1037,19 @@ onMounted(loadSession)
 <label>依赖知识库<select v-model="resourceForm.skillKnowledgeVersionIds" multiple><option v-for="item in catalogFor('KNOWLEDGE')" :key="item.version_id" :value="item.version_id">{{ optionLabel(item) }}</option></select></label>
 </template>
 <template v-else-if="resourceForm.type === 'TOOL'">
-<label>原生工具<select v-model="resourceForm.nativeName">
-<option value="echo">Echo</option>
-<option value="calculator">Calculator</option>
-<option value="current_time">Current Time</option>
-</select>
-</label>
+<label>工具类型<select v-model="resourceForm.toolMode"><option value="NATIVE">平台原生工具</option><option value="HTTP">受控 HTTP Tool</option></select></label>
+<template v-if="resourceForm.toolMode === 'NATIVE'"><label>原生工具<select v-model="resourceForm.nativeName"><option value="echo">Echo</option><option value="calculator">Calculator</option><option value="current_time">Current Time</option></select></label></template>
+<template v-else>
+<div class="dify-section-title wide-field"><b>固定外部 API</b><span>模型只能调用此固定 Endpoint + Path，参数仅来自下方 JSON Schema；不能访问任意 URL。</span></div>
+<label class="wide-field">API Endpoint<input v-model="resourceForm.httpEndpoint" placeholder="https://api.example.com/service" /></label>
+<label>固定路径<input v-model="resourceForm.httpPath" placeholder="/v1/policies/search" /></label><label>请求方法<select v-model="resourceForm.httpMethod"><option value="GET">GET</option><option value="POST">POST</option></select></label>
+<label>Tool Name<input v-model="resourceForm.httpToolName" placeholder="search_policy" /></label><label>调用超时（秒）<input v-model.number="resourceForm.httpTimeout" type="number" min="1" max="60" /></label>
+<label class="wide-field">输入 JSON Schema<textarea v-model="resourceForm.httpInputSchema" rows="4" placeholder='{"type":"object","properties":{"query":{"type":"string"}}}' /></label>
+<label class="wide-field">Query 模板（可选）<textarea v-model="resourceForm.httpQueryTemplate" rows="3" placeholder='{"q":"{{query}}"}' /></label>
+<label class="wide-field">POST Body 模板（可选）<textarea v-model="resourceForm.httpBodyTemplate" rows="3" placeholder='{"query":"{{query}}"}' /></label>
+<label>API Key（可选）<input v-model="resourceForm.httpApiKey" type="password" autocomplete="new-password" placeholder="仅本次提交，后端保存至 Vault" /></label>
+<label class="wide-field">测试参数 JSON<textarea v-model="resourceForm.httpTestArguments" rows="3" placeholder='{"query":"员工考勤管理办法"}' /></label>
+</template>
 </template>
 <template v-else-if="resourceForm.type === 'DIFY_FLOW'">
 <div class="dify-section-title wide-field"><b>1. Dify 应用连接</b><span>使用 Dify 应用 API 地址和 App API Key；Key 仅提交到后端 Vault。</span></div>
