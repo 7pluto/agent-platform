@@ -377,7 +377,7 @@ class OpenAICompatibleRuntimeAdapter(RuntimeAdapter):
             return {"skill_instructions": config["skill_md"]}
         if config["kind"] == "MCP":
             headers = await mcp_auth_headers(config, context.run.tenant_id, context.run.user_id)
-            return await mcp_client.invoke(config["endpoint"], name, arguments, float(config.get("timeout_seconds", 10)), headers)
+            return await mcp_client.invoke(config["endpoint"], name, arguments, float(config.get("timeout_seconds", 10)), headers, config["egress_allowlist"])
         if config["kind"] == "DIFY_FLOW":
             runtime_arguments = {
                 **arguments,

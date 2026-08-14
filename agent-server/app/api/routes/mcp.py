@@ -49,7 +49,7 @@ async def create_mcp_connection(request: McpConnectionCreate, principal: Princip
         from app.core.errors import ApiError
         raise ApiError(422, "INVALID_MCP_CONNECTION", "endpoint must contain a hostname")
     headers = {request.auth_header: f"{request.auth_scheme} {request.api_key}".strip()} if request.api_key else {}
-    await mcp_client.discover(request.endpoint, request.timeout_seconds, headers)
+    await mcp_client.discover(request.endpoint, request.timeout_seconds, headers, [host])
     config = {"transport": "streamable_http", "endpoint": request.endpoint, "timeout_seconds": request.timeout_seconds, "egress_allowlist": [host]}
     fingerprint = None
     if request.api_key:
@@ -73,7 +73,7 @@ async def discover_mcp_tools(resource_version_id: UUID, principal: Principal = D
         raise ApiError(422, "RESOURCE_TYPE_MISMATCH", "resource version is not an MCP connection")
     ResourceRegistryStore._validate(ResourceType.MCP_CONNECTION, connection.config)
     headers = await mcp_auth_headers(connection.config, principal.tenant_id, principal.external_user_id)
-    tools = await mcp_client.discover(connection.config["endpoint"], float(connection.config.get("timeout_seconds", 10)), headers)
+    tools = await mcp_client.discover(connection.config["endpoint"], float(connection.config.get("timeout_seconds", 10)), headers, connection.config["egress_allowlist"])
     return [McpDiscoveredTool(name=item["name"], description=item.get("description"), input_schema=item.get("inputSchema", {})) for item in tools]
 
 
@@ -86,7 +86,7 @@ async def register_discovered_tool(request: RegisterDiscoveredToolRequest, princ
         raise ApiError(422, "RESOURCE_TYPE_MISMATCH", "connection version is not MCP")
     ResourceRegistryStore._validate(ResourceType.MCP_CONNECTION, connection.config)
     headers = await mcp_auth_headers(connection.config, principal.tenant_id, principal.external_user_id)
-    discovered = await mcp_client.discover(connection.config["endpoint"], float(connection.config.get("timeout_seconds", 10)), headers)
+    discovered = await mcp_client.discover(connection.config["endpoint"], float(connection.config.get("timeout_seconds", 10)), headers, connection.config["egress_allowlist"])
     match = next((item for item in discovered if item["name"] == request.tool_name), None)
     if match is None:
         from app.core.errors import ApiError

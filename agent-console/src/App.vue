@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { consolePaths } from './app/navigation'
 import {
   api, type AgentWorkbenchItem, type CatalogItem, type ConfigurationDraft,
   type ConfigurationValidation, type ConversationMessage, type ConversationRecord,
@@ -12,6 +14,9 @@ type Space = 'workspace' | 'console'
 type WorkspaceView = 'agents' | 'chat'
 type ConsoleView = 'overview' | 'agents' | 'resources' | 'knowledge' | 'runs' | 'permissions'
 type ResourceType = 'ALL' | 'MODEL' | 'PROMPT' | 'SKILL' | 'TOOL' | 'MCP_CONNECTION' | 'KNOWLEDGE' | 'MEMORY_POLICY'
+
+const router = useRouter()
+const route = useRoute()
 
 const principal = ref<Principal | null>(null)
 const csrf = ref('')
@@ -146,6 +151,38 @@ function requestId() { return crypto.randomUUID?.() || `${Date.now()}-${Math.ran
 function consoleTitle(view: ConsoleView) {
   return ({ overview: '概览', agents: '智能体管理', resources: '资源中心', knowledge: '知识库运营', runs: '运行治理', permissions: '权限与审计' } as Record<ConsoleView, string>)[view]
 }
+function goWorkspaceAgents() { void router.push('/workspace/agents') }
+function goConsole(view: ConsoleView) { void router.push(consolePaths[view]) }
+
+async function applyRouteState() {
+  const name = String(route.name || '')
+  if (name === 'workspace-agents') { space.value = 'workspace'; workspaceView.value = 'agents'; return }
+  if (name === 'workspace-agent-chat') {
+    space.value = 'workspace'; workspaceView.value = 'chat'
+    const item = agents.value.find(value => value.deployment_id === String(route.params.id))
+    if (item && selectedAgent.value?.deployment_id !== item.deployment_id) await openAgent(item)
+    return
+  }
+  if (!name.startsWith('console-')) return
+  space.value = 'console'
+  const view = ({
+    'console-overview': 'overview', 'console-agents': 'agents', 'console-agent-edit': 'agents',
+    'console-capabilities': 'resources', 'console-capability-detail': 'resources',
+    'console-knowledge': 'knowledge', 'console-knowledge-detail': 'knowledge',
+    'console-connections': 'resources', 'console-connection-detail': 'resources',
+    'console-runs': 'runs', 'console-run-detail': 'runs', 'console-governance': 'permissions',
+  } as Record<string, ConsoleView>)[name]
+  if (view) consoleView.value = view
+  const resourceId = typeof route.params.id === 'string' ? route.params.id : ''
+  if (name === 'console-capability-detail' || name === 'console-connection-detail') {
+    const item = resources.value.find(value => value.resource_id === resourceId)
+    if (item && selectedResource.value?.resource.resource_id !== item.resource_id) await openResource(item, false)
+  }
+  if (name === 'console-knowledge-detail') {
+    const item = resources.value.find(value => value.resource_id === resourceId)
+    if (item && selectedKnowledge.value?.resource_id !== item.resource_id) await openKnowledge(item, false)
+  }
+}
 
 async function refreshCaptcha() {
   const data = await api.ruoyiCaptcha()
@@ -159,7 +196,7 @@ async function login() {
       : await api.exchange(ticket.value)
     principal.value = session.principal; csrf.value = session.csrf_token
     space.value = isAdmin.value ? 'console' : 'workspace'
-    await refreshData()
+    await refreshData(); await applyRouteState()
   } catch (err) { error.value = err instanceof Error ? err.message : String(err); if (authMode.value === 'password') await refreshCaptcha() }
   finally { loading.value = false }
 }
@@ -168,7 +205,7 @@ async function loadSession() {
     const session = await api.session()
     principal.value = session.principal; csrf.value = session.csrf_token
     space.value = isAdmin.value ? 'console' : 'workspace'
-    await refreshData()
+    await refreshData(); await applyRouteState()
   } catch {
     authMode.value = (await api.authMode()).mode
     if (authMode.value === 'password') await refreshCaptcha()
@@ -308,15 +345,17 @@ async function loadResources() {
     resources.value = data.items
   } finally { resourceLoading.value = false }
 }
-async function openResource(item: ResourceListItem) {
+async function openResource(item: ResourceListItem, updateRoute = true) {
   selectedKnowledge.value = null
   selectedResource.value = await api.workbenchResource(item.resource_id)
   populateDescriptorForm()
+  if (updateRoute) void router.push(`/console/capabilities/${item.resource_id}`)
 }
-async function openKnowledge(item: ResourceListItem) {
+async function openKnowledge(item: ResourceListItem, updateRoute = true) {
   selectedResource.value = await api.workbenchResource(item.resource_id)
   selectedKnowledge.value = await api.workbenchKnowledge(item.resource_id)
   populateDescriptorForm()
+  if (updateRoute) void router.push(`/console/knowledge/${item.resource_id}`)
 }
 function populateDescriptorForm() {
   if (!selectedResource.value) return
@@ -398,8 +437,10 @@ async function openAgent(item: AgentWorkbenchItem, configure = false) {
       .map(subject => difySubjectValue(subject.subject_type, subject.subject_id))
     validation.value = null; builderStep.value = 1
     space.value = 'console'; consoleView.value = 'agents'
+    void router.push(`/console/agents/${item.deployment_id}/edit`)
   } else {
     space.value = 'workspace'; workspaceView.value = 'chat'
+    void router.push(`/workspace/agents/${item.deployment_id}/chat`)
     await openConversation(item.deployment_id)
   }
 }
@@ -659,6 +700,7 @@ async function sendMessage() {
 
 watch([resourceQuery, resourceType], () => { if (principal.value && isAdmin.value) void loadResources() })
 watch([agentQuery, agentActive], () => { if (principal.value) void loadAgents() })
+watch(() => route.fullPath, () => { if (principal.value) void applyRouteState() })
 onMounted(loadSession)
 </script>
 
@@ -692,7 +734,7 @@ onMounted(loadSession)
 
   <main v-else class="product-shell">
     <aside class="sidebar">
-      <button class="sidebar-brand" @click="space = 'workspace'; workspaceView = 'agents'">
+      <button class="sidebar-brand" @click="goWorkspaceAgents">
 <span class="brand-symbol small">A</span>
 <span>
 <b>企业智能体平台</b>
@@ -700,22 +742,22 @@ onMounted(loadSession)
 </span>
 </button>
       <div class="space-switch">
-<button :class="{ active: space === 'workspace' }" @click="space = 'workspace'">使用工作台</button>
-<button v-if="isAdmin" :class="{ active: space === 'console' }" @click="space = 'console'">管理控制台</button>
+<button :class="{ active: space === 'workspace' }" @click="goWorkspaceAgents">使用工作台</button>
+<button v-if="isAdmin" :class="{ active: space === 'console' }" @click="goConsole('overview')">管理控制台</button>
 </div>
       <nav v-if="space === 'workspace'" class="nav-list">
-<button :class="{ active: workspaceView === 'agents' }" @click="workspaceView = 'agents'">智能体广场</button>
-<button :class="{ active: workspaceView === 'chat' }" :disabled="!selectedAgent" @click="workspaceView = 'chat'">我的会话</button>
+<button :class="{ active: workspaceView === 'agents' }" @click="goWorkspaceAgents">智能体广场</button>
+<button :class="{ active: workspaceView === 'chat' }" :disabled="!selectedAgent" @click="selectedAgent && router.push(`/workspace/agents/${selectedAgent.deployment_id}/chat`)">我的会话</button>
 </nav>
       <nav v-else class="nav-list">
 <p>管理</p>
-<button :class="{ active: consoleView === 'overview' }" @click="consoleView = 'overview'">概览</button>
-<button :class="{ active: consoleView === 'agents' }" @click="consoleView = 'agents'">智能体管理</button>
-<button :class="{ active: consoleView === 'resources' }" @click="consoleView = 'resources'">资源中心</button>
-<button :class="{ active: consoleView === 'knowledge' }" @click="consoleView = 'knowledge'">知识库运营</button>
+<button :class="{ active: consoleView === 'overview' }" @click="goConsole('overview')">概览</button>
+<button :class="{ active: consoleView === 'agents' }" @click="goConsole('agents')">智能体管理</button>
+<button :class="{ active: consoleView === 'resources' }" @click="goConsole('resources')">资源中心</button>
+<button :class="{ active: consoleView === 'knowledge' }" @click="goConsole('knowledge')">知识库运营</button>
 <p>治理</p>
-<button :class="{ active: consoleView === 'runs' }" @click="consoleView = 'runs'">运行治理</button>
-<button :class="{ active: consoleView === 'permissions' }" @click="consoleView = 'permissions'">权限与审计</button>
+<button :class="{ active: consoleView === 'runs' }" @click="goConsole('runs')">运行治理</button>
+<button :class="{ active: consoleView === 'permissions' }" @click="goConsole('permissions')">权限与审计</button>
 </nav>
       <div class="sidebar-user">
 <span class="user-avatar">{{ principal.display_name.slice(0, 1) }}</span>

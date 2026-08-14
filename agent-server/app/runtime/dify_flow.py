@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
 from app.core.errors import ApiError
 from app.core.secrets import resolve_env_secret, resolve_secret_reference
+from app.outbound.safe_http import OutboundPolicy, safe_http_client
 
 
 @dataclass(frozen=True)
@@ -17,6 +19,7 @@ class DifyFlowClient:
     api_key: str
     flow_type: str
     timeout_seconds: float
+    egress_allowlist: tuple[str, ...] = ()
 
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> "DifyFlowClient":
@@ -25,6 +28,7 @@ class DifyFlowClient:
             api_key=resolve_env_secret(str(config["secret_ref"])),
             flow_type=str(config.get("flow_type", "CHATFLOW")).upper(),
             timeout_seconds=float(config.get("timeout_seconds", 60)),
+            egress_allowlist=tuple(str(item) for item in config.get("egress_allowlist", [])),
         )
 
     @classmethod
@@ -34,6 +38,16 @@ class DifyFlowClient:
             api_key=await resolve_secret_reference(str(config["secret_ref"]), tenant_id, user_id),
             flow_type=str(config.get("flow_type", "CHATFLOW")).upper(),
             timeout_seconds=float(config.get("timeout_seconds", 60)),
+            egress_allowlist=tuple(str(item) for item in config.get("egress_allowlist", [])),
+        )
+
+    def _outbound_policy(self) -> OutboundPolicy:
+        # Published Tool config is validated to require egress_allowlist.  The
+        # fallback only preserves the direct constructor used by isolated tests.
+        host = urlsplit(self.base_url).hostname
+        return OutboundPolicy(
+            allowed_hosts=tuple(host.lower() for host in self.egress_allowlist) or ((host or "").lower(),),
+            timeout_seconds=self.timeout_seconds,
         )
 
     async def invoke(self, arguments: dict[str, Any], *, user_id: str) -> dict[str, Any]:
@@ -64,14 +78,15 @@ class DifyFlowClient:
             payload = {"inputs": inputs, "response_mode": "blocking", "user": user_id}
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-                response = await client.post(
-                    f"{self.base_url}{path}",
-                    json=payload,
-                    headers={"Authorization": f"Bearer {self.api_key}"},
-                )
-                response.raise_for_status()
-                body = response.json()
+            response = await safe_http_client.request(
+                "POST",
+                f"{self.base_url}{path}",
+                json_body=payload,
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                policy=self._outbound_policy(),
+            )
+            response.raise_for_status()
+            body = response.json()
         except httpx.TimeoutException as exc:
             raise ApiError(504, "DIFY_FLOW_TIMEOUT", "Dify Flow request timed out") from exc
         except httpx.HTTPError as exc:
@@ -113,13 +128,14 @@ class DifyFlowClient:
         provide those required values.
         """
         try:
-            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-                response = await client.get(
-                    f"{self.base_url}/parameters",
-                    headers={"Authorization": f"Bearer {self.api_key}"},
-                )
-                response.raise_for_status()
-                body = response.json()
+            response = await safe_http_client.request(
+                "GET",
+                f"{self.base_url}/parameters",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                policy=self._outbound_policy(),
+            )
+            response.raise_for_status()
+            body = response.json()
         except httpx.TimeoutException as exc:
             raise ApiError(504, "DIFY_FLOW_TIMEOUT", "Dify application inspection timed out") from exc
         except httpx.HTTPStatusError as exc:
