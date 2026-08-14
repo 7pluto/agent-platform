@@ -1,0 +1,25 @@
+api:
+  image: enterprise-agent-platform-server:latest
+  replicas: 2
+  port: 8000
+console:
+  image: enterprise-agent-platform-console:latest
+  replicas: 2
+  port: 80
+imagePullSecrets: []
+serviceAccountName: ""
+config:
+  apiPrefix: /api/v1
+  ruoyiBaseUrl: ""
+  ruoyiTicketPath: /client/ticketLogin
+  ruoyiCurrentUserPath: /ydbg/org/getUserinfo
+  tenantMap: '{"org-demo":"tenant-demo"}'
+  platformAdminRoleCodes: '["agent_admin"]'
+secrets:
+  existingSecret: agent-platform-runtime
+  databaseUrlKey: database-url
+  redisUrlKey: redis-url
+  sessionEncryptionKeyKey: session-encryption-key
+resources:
+  requests: { cpu: 100m, memory: 256Mi }
+  limits: { cpu: "1", memory: 1Gi }

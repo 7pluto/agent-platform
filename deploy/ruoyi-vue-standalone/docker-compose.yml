@@ -1,0 +1,79 @@
+services:
+  ruoyi-mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ry-vue
+      MYSQL_USER: ruoyi
+      MYSQL_PASSWORD: ${RUOYI_DB_PASSWORD:?set RUOYI_DB_PASSWORD in .env}
+      MYSQL_ROOT_PASSWORD: ${RUOYI_MYSQL_ROOT_PASSWORD:?set RUOYI_MYSQL_ROOT_PASSWORD in .env}
+      TZ: Asia/Shanghai
+    command: ["--default-authentication-plugin=mysql_native_password", "--character-set-server=utf8mb4", "--collation-server=utf8mb4_general_ci"]
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$$MYSQL_ROOT_PASSWORD"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - ruoyi-mysql-data:/var/lib/mysql
+      - ../ruoyi-vue-gitee/sql/ry_20260417.sql:/docker-entrypoint-initdb.d/01-ry.sql:ro
+      - ../ruoyi-vue-gitee/sql/quartz.sql:/docker-entrypoint-initdb.d/02-quartz.sql:ro
+    ports:
+      - "127.0.0.1:3307:3306"
+
+  ruoyi-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${RUOYI_REDIS_PASSWORD:?set RUOYI_REDIS_PASSWORD in .env}"]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a $$RUOYI_REDIS_PASSWORD ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - ruoyi-redis-data:/data
+
+  ruoyi-server:
+    build:
+      context: ../ruoyi-vue-gitee
+      dockerfile: ../ruoyi-vue-standalone/Dockerfile.backend
+    restart: unless-stopped
+    environment:
+      RUOYI_DB_PASSWORD: ${RUOYI_DB_PASSWORD:?set RUOYI_DB_PASSWORD in .env}
+      RUOYI_REDIS_PASSWORD: ${RUOYI_REDIS_PASSWORD:?set RUOYI_REDIS_PASSWORD in .env}
+      RUOYI_TOKEN_SECRET: ${RUOYI_TOKEN_SECRET:?set RUOYI_TOKEN_SECRET in .env}
+      TZ: Asia/Shanghai
+    volumes:
+      - ./application-docker.yml:/config/application-docker.yml:ro
+      - ruoyi-upload-data:/data/uploadPath
+    depends_on:
+      ruoyi-mysql:
+        condition: service_healthy
+      ruoyi-redis:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8180:8080"
+    networks:
+      - default
+      - agent-iam
+
+  ruoyi-ui:
+    build:
+      context: ..
+      dockerfile: ruoyi-vue-standalone/Dockerfile.frontend
+    restart: unless-stopped
+    depends_on:
+      ruoyi-server:
+        condition: service_started
+    ports:
+      - "5180:80"
+
+networks:
+  agent-iam:
+    name: agent-platform-iam
+    external: true
+
+volumes:
+  ruoyi-mysql-data:
+  ruoyi-redis-data:
+  ruoyi-upload-data:

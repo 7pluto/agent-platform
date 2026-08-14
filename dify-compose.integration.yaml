@@ -1,0 +1,11 @@
+services:
+  nginx:
+    networks:
+      default:
+      agent-integration:
+        aliases:
+          - dify-gateway
+
+networks:
+  agent-integration:
+    external: true

@@ -1,0 +1,1 @@
+"""Database boundary for PostgreSQL-backed deployments."""

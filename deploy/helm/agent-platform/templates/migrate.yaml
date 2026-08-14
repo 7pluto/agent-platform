@@ -1,0 +1,19 @@
+apiVersion: batch/v1
+kind: Job
+metadata: { name: {{ .Release.Name }}-migrate, labels: {{- include "agent-platform.labels" . | nindent 4 }} }
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: migrate
+          image: {{ .Values.api.image | quote }}
+          command: ["alembic", "upgrade", "head"]
+          envFrom: [{ secretRef: { name: {{ .Values.secrets.existingSecret | quote }} } }]
+          env:
+            - { name: AGENT_APP_ENV, value: prod }
+            - { name: AGENT_IAM_MODE, value: ruoyi }
+            - { name: AGENT_STORAGE_MODE, value: postgres }
+            - { name: AGENT_SESSION_STORAGE_MODE, value: redis }
+            - { name: AGENT_RUNTIME_EXECUTION_MODE, value: disabled }

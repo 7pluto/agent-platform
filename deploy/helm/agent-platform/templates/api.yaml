@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-api
+  labels: {{- include "agent-platform.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.api.replicas }}
+  selector: { matchLabels: { app.kubernetes.io/component: api, app.kubernetes.io/instance: {{ .Release.Name }} } }
+  template:
+    metadata: { labels: { app.kubernetes.io/component: api, app.kubernetes.io/instance: {{ .Release.Name }} } }
+    spec:
+      {{- if .Values.serviceAccountName }}serviceAccountName: {{ .Values.serviceAccountName }}{{- end }}
+      containers:
+        - name: api
+          image: {{ .Values.api.image | quote }}
+          ports: [{ containerPort: {{ .Values.api.port }} }]
+          envFrom: [{ secretRef: { name: {{ .Values.secrets.existingSecret | quote }} } }]
+          env:
+            - { name: AGENT_APP_ENV, value: prod }
+            - { name: AGENT_IAM_MODE, value: ruoyi }
+            - { name: AGENT_STORAGE_MODE, value: postgres }
+            - { name: AGENT_SESSION_STORAGE_MODE, value: redis }
+            - { name: AGENT_RUNTIME_EXECUTION_MODE, value: disabled }
+            - { name: AGENT_API_PREFIX, value: {{ .Values.config.apiPrefix | quote }} }
+            - { name: AGENT_RUOYI_BASE_URL, value: {{ .Values.config.ruoyiBaseUrl | quote }} }
+            - { name: AGENT_TENANT_MAP, value: {{ .Values.config.tenantMap | quote }} }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true }
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          readinessProbe: { httpGet: { path: /api/v1/healthz, port: {{ .Values.api.port }} } }
+          livenessProbe: { httpGet: { path: /api/v1/healthz, port: {{ .Values.api.port }} } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: {{ .Release.Name }}-api, labels: {{- include "agent-platform.labels" . | nindent 4 }} }
+spec:
+  selector: { app.kubernetes.io/component: api, app.kubernetes.io/instance: {{ .Release.Name }} }
+  ports: [{ port: 80, targetPort: {{ .Values.api.port }} }]

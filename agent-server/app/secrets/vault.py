@@ -1,0 +1,91 @@
+from __future__ import annotations
+
+import hashlib
+import re
+from datetime import datetime
+from uuid import UUID, uuid4
+
+from cryptography.fernet import Fernet, InvalidToken
+from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.config import get_settings
+from app.core.errors import ApiError
+from app.db.models import SecretVaultRow
+from app.db.rls import set_local_tenant_context
+from app.db.session import get_session_factory
+from app.iam.models import Principal
+
+
+_VAULT_REF = re.compile(r"^vault://([0-9a-fA-F-]{36})$")
+
+
+class SecretCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    value: str = Field(min_length=1, max_length=32_768)
+
+
+class SecretRecord(BaseModel):
+    secret_ref: str
+    name: str
+    fingerprint: str
+    created_by: str
+    created_at: datetime
+
+
+class SecretVault:
+    def __init__(self) -> None:
+        key = get_settings().secret_encryption_key
+        if not key:
+            raise ApiError(503, "SECRET_VAULT_NOT_CONFIGURED", "platform secret vault is not configured")
+        try:
+            self._fernet = Fernet(key.encode())
+        except ValueError as exc:
+            raise ApiError(503, "SECRET_VAULT_INVALID_KEY", "platform secret vault key is invalid") from exc
+
+    async def create(self, name: str, value: str, principal: Principal) -> SecretRecord:
+        if not value.strip():
+            raise ApiError(422, "SECRET_VALUE_REQUIRED", "secret value is required")
+        secret_id = uuid4()
+        row = SecretVaultRow(
+            secret_id=secret_id,
+            tenant_id=principal.tenant_id,
+            name=name[:128],
+            encrypted_value=self._fernet.encrypt(value.encode()).decode(),
+            fingerprint=hashlib.sha256(value.encode()).hexdigest(),
+            created_by=principal.external_user_id,
+        )
+        async with get_session_factory()() as session:
+            async with session.begin():
+                await set_local_tenant_context(session, principal.tenant_id, principal.external_user_id)
+                session.add(row)
+                await session.flush()
+        return SecretRecord(secret_ref=f"vault://{secret_id}", name=row.name, fingerprint=row.fingerprint, created_by=row.created_by, created_at=row.created_at)
+
+    async def list(self, principal: Principal) -> list[SecretRecord]:
+        async with get_session_factory()() as session:
+            async with session.begin():
+                await set_local_tenant_context(session, principal.tenant_id, principal.external_user_id)
+                rows = await session.scalars(select(SecretVaultRow).where(SecretVaultRow.tenant_id == principal.tenant_id).order_by(SecretVaultRow.created_at.desc()))
+                return [SecretRecord(secret_ref=f"vault://{row.secret_id}", name=row.name, fingerprint=row.fingerprint, created_by=row.created_by, created_at=row.created_at) for row in rows.all()]
+
+    async def resolve(self, secret_ref: str, tenant_id: str, user_id: str) -> str:
+        match = _VAULT_REF.fullmatch(secret_ref)
+        if not match:
+            raise ApiError(422, "INVALID_SECRET_REF", "secret reference must use vault://UUID")
+        async with get_session_factory()() as session:
+            async with session.begin():
+                await set_local_tenant_context(session, tenant_id, user_id)
+                row = await session.get(SecretVaultRow, UUID(match.group(1)))
+                if row is None or row.tenant_id != tenant_id:
+                    raise ApiError(404, "SECRET_NOT_FOUND", "referenced secret was not found")
+                encrypted = row.encrypted_value
+        try:
+            return self._fernet.decrypt(encrypted.encode()).decode()
+        except InvalidToken as exc:
+            raise ApiError(500, "SECRET_DECRYPTION_FAILED", "referenced secret cannot be decrypted") from exc
+
+
+def get_secret_vault() -> SecretVault:
+    return SecretVault()

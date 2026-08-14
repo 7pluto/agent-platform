@@ -1,0 +1,118 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-agent_platform}
+      POSTGRES_USER: ${POSTGRES_USER:-agent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent -d agent_platform"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis-data:/data
+
+  minio:
+    image: minio/minio:RELEASE.2025-01-20T14-49-07Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-agent-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set in .env}
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - minio-data:/data
+
+  demo-crm-mcp:
+    build: ./demo-crm-mcp
+    expose:
+      - "8090"
+
+  agent-migrate:
+    build: ./agent-server
+    command: ["alembic", "upgrade", "head"]
+    environment: &agent-env
+      AGENT_APP_ENV: dev
+      AGENT_IAM_MODE: mock
+      AGENT_STORAGE_MODE: postgres
+      AGENT_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-agent}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@postgres:5432/${POSTGRES_DB:-agent_platform}
+      AGENT_SESSION_STORAGE_MODE: redis
+      AGENT_REDIS_URL: redis://redis:6379/0
+      AGENT_RUNTIME_HARNESS: langgraph_baseline
+      AGENT_RUNTIME_EXECUTION_MODE: worker
+      AGENT_WORKER_ID: compose-worker-1
+      AGENT_MINIO_ENDPOINT: http://minio:9000
+      AGENT_MINIO_BUCKET: agent-platform
+      AGENT_MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-agent-minio}
+      AGENT_MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set in .env}
+      AGENT_SESSION_ENCRYPTION_KEY: ${AGENT_SESSION_ENCRYPTION_KEY:?AGENT_SESSION_ENCRYPTION_KEY must be set in .env}
+      AGENT_SECRET_ENCRYPTION_KEY: ${AGENT_SECRET_ENCRYPTION_KEY:?AGENT_SECRET_ENCRYPTION_KEY must be set in .env}
+      AGENT_TENANT_MAP: '{"org-demo":"tenant-demo"}'
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  agent-server:
+    build: ./agent-server
+    environment: *agent-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      agent-migrate:
+        condition: service_completed_successfully
+    ports:
+      - "8000:8000"
+    networks:
+      - default
+      - agent-integration
+
+  agent-worker:
+    build: ./agent-server
+    command: ["python", "-m", "app.worker_main"]
+    environment: *agent-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      agent-migrate:
+        condition: service_completed_successfully
+    networks:
+      - default
+      - agent-integration
+
+  agent-console:
+    build: ./agent-console
+    depends_on:
+      agent-server:
+        condition: service_started
+    ports:
+      - "5173:80"
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
+
+networks:
+  agent-integration:
+    external: true

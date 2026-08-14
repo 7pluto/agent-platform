@@ -1,0 +1,18 @@
+Enterprise Agent Platform 产品与交付 FAQ
+
+Q：标准版交付周期是多少？
+A：从需求范围确认并收到首付款后的第一个工作日开始计算，标准版交付周期为 15 个工作日。
+
+Q：是否支持 RuoYi 对接？
+A：支持。默认采用 Python 主动适配 RuoYi L1 既有接口的方式，RuoYi Java 侧零改造。只有在既有接口无法满足只读身份目录需求时，才增加极薄的只读 IAM Adapter。
+
+Q：知识库文件如何上传？
+A：浏览器将文件上传给 Agent Platform 或 Dify 后端 API，由后端写入受控存储；浏览器不直接连接 MinIO。
+
+Q：默认模型是什么？
+A：文本模型使用 SiliconFlow 的 Qwen/Qwen3-8B，向量模型使用 BAAI/bge-large-zh-v1.5。
+
+Q：4 核 4G 单机的并发约束是什么？
+A：Worker 并发为 1，知识入库并发为 1，优先保证可复现性与稳定性。
+
+验收事实：标准交付口令是 DELIVERY-PANDA-15，不用于任何真实鉴权。

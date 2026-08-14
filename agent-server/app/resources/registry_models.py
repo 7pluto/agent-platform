@@ -1,0 +1,59 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from enum import StrEnum
+from typing import Any
+from uuid import UUID, uuid4
+
+from pydantic import BaseModel, Field
+
+
+class ResourceType(StrEnum):
+    MODEL = "MODEL"
+    PROMPT = "PROMPT"
+    SKILL = "SKILL"
+    TOOL = "TOOL"
+    MCP_SERVER = "MCP_SERVER"
+    MCP_CONNECTION = "MCP_CONNECTION"
+    KNOWLEDGE = "KNOWLEDGE"
+    MEMORY_POLICY = "MEMORY_POLICY"
+
+
+class ResourceVersionStatus(StrEnum):
+    DRAFT = "DRAFT"
+    PUBLISHED = "PUBLISHED"
+    DEPRECATED = "DEPRECATED"
+
+
+class ResourceDefinitionCreate(BaseModel):
+    resource_type: ResourceType
+    slug: str = Field(pattern=r"^[a-z][a-z0-9-]{2,63}$")
+    display_name: str = Field(min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=4_000)
+    draft_config: dict[str, Any] = Field(default_factory=dict)
+
+
+class ResourceDefinitionRecord(ResourceDefinitionCreate):
+    resource_id: UUID = Field(default_factory=uuid4)
+    tenant_id: str
+    created_by: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class ResourceVersionCreate(BaseModel):
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class ResourceVersionRecord(BaseModel):
+    resource_version_id: UUID = Field(default_factory=uuid4)
+    resource_id: UUID
+    tenant_id: str
+    resource_type: ResourceType
+    version_number: int
+    status: ResourceVersionStatus = ResourceVersionStatus.DRAFT
+    config: dict[str, Any]
+    content_hash: str
+    created_by: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    published_at: datetime | None = None

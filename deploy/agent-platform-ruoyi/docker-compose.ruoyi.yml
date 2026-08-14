@@ -1,0 +1,45 @@
+services:
+  agent-server:
+    environment:
+      AGENT_APP_ENV: prod
+      AGENT_SESSION_COOKIE_NAME: __Host-ap_session
+      AGENT_SESSION_COOKIE_SECURE: "true"
+      AGENT_IAM_MODE: ruoyi
+      AGENT_RUOYI_AUTH_MODE: password
+      AGENT_RUOYI_BASE_URL: http://ruoyi-server:8080
+      AGENT_RUOYI_VERIFY_TLS: "false"
+      AGENT_RUOYI_CURRENT_USER_PATH: /agent-iam/me
+      AGENT_RUOYI_USER_SEARCH_PATH: /agent-iam/users
+      AGENT_RUOYI_DEPT_PATH: /agent-iam/departments
+      AGENT_RUOYI_DEFAULT_ORG_ID: ruoyi-default
+      AGENT_TENANT_MAP: '{"ruoyi-default":"tenant-demo"}'
+      AGENT_PLATFORM_ADMIN_ROLE_CODES: '["admin"]'      # Bootstrap identity for the standard RuoYi administrator; resource grants remain platform-owned.
+      AGENT_PLATFORM_ADMIN_USER_IDS: '["1"]'
+      AGENT_RUNTIME_EXECUTION_MODE: worker
+      AGENT_RUNTIME_HARNESS: langgraph_baseline
+      AGENT_MINIO_ENDPOINT: http://minio:9000
+      AGENT_MINIO_BUCKET: agent-platform
+      AGENT_MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-agent-minio}
+      AGENT_MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set in .env}
+    networks:
+      - default
+      - agent-iam
+
+  agent-worker:
+    environment:
+      AGENT_APP_ENV: prod
+      AGENT_IAM_MODE: ruoyi
+      AGENT_RUNTIME_EXECUTION_MODE: worker
+      AGENT_RUNTIME_HARNESS: langgraph_baseline
+      AGENT_MINIO_ENDPOINT: http://minio:9000
+      AGENT_MINIO_BUCKET: agent-platform
+      AGENT_MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-agent-minio}
+      AGENT_MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set in .env}
+    networks:
+      - default
+      - agent-iam
+
+networks:
+  agent-iam:
+    name: agent-platform-iam
+    external: true

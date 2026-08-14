@@ -1,0 +1,11 @@
+:80 {
+	reverse_proxy 127.0.0.1:5200
+}
+
+admin.chenwh.xin {
+	reverse_proxy 127.0.0.1:5180
+}
+
+agent.chenwh.xin {
+	reverse_proxy 127.0.0.1:5173
+}

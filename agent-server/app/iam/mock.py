@@ -1,0 +1,54 @@
+from __future__ import annotations
+
+from app.iam.models import ExternalIdentityContext, Subject, SubjectPage
+from app.iam.providers import (
+    CaptchaChallenge,
+    IamAuthError,
+    IamProvider,
+    IamUnavailableError,
+    PasswordCredentials,
+    UpstreamToken,
+)
+
+
+class MockIamProvider(IamProvider):
+    """Deterministic provider for local development and contract tests only."""
+
+    def __init__(self) -> None:
+        self._tokens = {"dev-ticket": "mock-ruoyi-token"}
+
+    async def exchange_ticket(self, ticket_code: str) -> UpstreamToken:
+        token = self._tokens.get(ticket_code)
+        if not token:
+            raise IamAuthError("mock ticket is invalid")
+        return UpstreamToken(token)
+
+    async def login_password(self, credentials: PasswordCredentials) -> UpstreamToken:
+        raise IamUnavailableError("password login is only available with RuoYi IAM mode")
+
+    async def fetch_captcha(self) -> CaptchaChallenge:
+        raise IamUnavailableError("captcha is only available with RuoYi IAM mode")
+
+    async def resolve_identity(self, token: UpstreamToken) -> ExternalIdentityContext:
+        if token.value != "mock-ruoyi-token":
+            raise IamAuthError("mock token is invalid")
+        return ExternalIdentityContext(
+            provider="ruoyi-mock",
+            external_user_id="user-demo",
+            external_org_id="org-demo",
+            display_name="Demo User",
+            user_type="01",
+            dept_ids=["dept-demo"],
+            role_codes=["agent_admin"],
+        )
+
+    async def search_subjects(
+        self, subject_type: str, query: str, cursor: str | None, limit: int, token: UpstreamToken
+    ) -> SubjectPage:
+        await self.resolve_identity(token)
+        items = [
+            Subject(type="USER", external_id="user-demo", display_name="Demo User"),
+            Subject(type="DEPT", external_id="dept-demo", display_name="Demo Department"),
+        ]
+        filtered = [item for item in items if item.type == subject_type.upper() and query.lower() in item.display_name.lower()]
+        return SubjectPage(items=filtered[:limit])
