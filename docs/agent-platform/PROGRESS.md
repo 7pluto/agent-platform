@@ -130,3 +130,10 @@ Stage 4 foundation: resource registry, Agent Assembly V2, worker deployment and 
 - Generic Dify Validate now executes through `DifyToolProvider` and retains the historical test response shape for Console compatibility; validation history records the provider and safe result separately.
 - MCP Provider discover returns a canonical schema hash, forming the basis for the upcoming Discovery Snapshot and Drift comparison.
 - Verification: Python compileall and focused provider/validation/Dify/MCP/registry suite pass (12 tests). No deployment or GitHub push was performed.
+
+# 2026-08-14 V1.5 MCP discovery-to-tool onboarding (local only)
+
+- MCP discovery responses now mark each advertised tool as `managed` or available by reconciling it with the tenant-scoped external-binding registry. The Console can therefore render a clear “already in Resource Center” state without ever returning MCP credentials.
+- Added `POST /mcp-tools/register-batch`: administrators select one or more cards from a fresh server-side discovery result and provide only business name, slug and optional description. Tool identity and input schema are always copied from the MCP server; invented names, duplicate selections, duplicate slugs and already-managed external tools are rejected before any resource is created.
+- The original single-tool endpoint remains compatible, but now also ignores client-supplied schemas and uses the freshly discovered MCP schema.
+- Verification: Python compileall plus MCP/provider/external-binding focused tests pass (5 passed). No deployment or GitHub push was performed.
