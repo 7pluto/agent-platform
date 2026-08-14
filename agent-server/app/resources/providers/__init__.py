@@ -6,6 +6,7 @@ from app.resources.providers.base import (
     TestResult,
     ValidationResult,
 )
+from app.resources.providers.registry import provider_registry
 
 __all__ = [
     "DiscoveryResult",
@@ -14,4 +15,5 @@ __all__ = [
     "ResourceProvider",
     "TestResult",
     "ValidationResult",
+    "provider_registry",
 ]

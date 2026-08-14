@@ -25,6 +25,7 @@ from app.resources.registry_models import (
 )
 from app.resources.validation import get_resource_validation_service
 from app.runtime.dify_flow import DifyFlowClient
+from app.resources.providers.registry import provider_registry
 from app.secrets.vault import get_secret_vault
 
 router = APIRouter(tags=["resource-registry"])
@@ -76,19 +77,16 @@ async def _validate_dify_version(
 ) -> ResourceValidationRunRecord:
     """Run and retain a safe, tenant-scoped Dify validation outcome."""
     started = perf_counter()
-    try:
-        result = await (await DifyFlowClient.from_runtime_config(
-            record.config, principal.tenant_id, principal.external_user_id,
-        )).test_connection(str(record.config.get("test_query", "请回复 OK")))
-    except ApiError as exc:
+    result = await provider_registry.resolve(record.resource_type, record.config, principal).validate(record.config)
+    if not result.ok:
         return await validation_runs.record(
             record.resource_version_id, validation_type, ResourceValidationStatus.FAILED,
-            {"code": exc.code, "message": exc.message}, principal,
+            result.model_dump(mode="json"), principal,
             round((perf_counter() - started) * 1000),
         )
     return await validation_runs.record(
         record.resource_version_id, validation_type, ResourceValidationStatus.SUCCEEDED,
-        result, principal, round((perf_counter() - started) * 1000),
+        {"provider": result.provider, "result": result.details}, principal, round((perf_counter() - started) * 1000),
     )
 
 
@@ -347,8 +345,8 @@ async def test_resource_version(resource_version_id: UUID, principal: Principal 
     outcome = await _validate_dify_version(record, principal, ResourceValidationType.TEST)
     await get_governance_store().record_audit(principal, "resource_version.test", record.resource_type.value, str(record.resource_version_id), {"validation_run_id": str(outcome.validation_run_id), "status": outcome.status.value})
     if outcome.status == ResourceValidationStatus.FAILED:
-        raise ApiError(502, str(outcome.result.get("code", "UPSTREAM_ERROR")), str(outcome.result.get("message", "Dify connection test failed")))
-    return outcome.result
+        raise ApiError(502, str(outcome.result.get("code") or outcome.result.get("error_code") or "UPSTREAM_ERROR"), str(outcome.result.get("message", "Dify connection test failed")))
+    return outcome.result.get("result", outcome.result)
 
 
 @router.post("/resource-versions/{resource_version_id}/validate", response_model=ResourceValidationRunRecord)

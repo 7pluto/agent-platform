@@ -123,3 +123,10 @@ Stage 4 foundation: resource registry, Agent Assembly V2, worker deployment and 
 - Secret Vault records now expose only safe lifecycle metadata: active/disabled status, last-used time and rotation/disable times. The same `vault://secret_id` is retained on rotation; new credential material replaces only the encrypted value/fingerprint. Disabled secrets cannot resolve at runtime.
 - Added local-only API endpoints for Secret rotation and disable. No server deployment was performed for this batch, per the requested consolidated-release workflow.
 - Verification: focused External Binding, MCP, Secret Vault, validation and registry suite passes (12 tests).
+
+# 2026-08-14 — V1.5 Iteration D/E provider extraction (in progress; local only)
+
+- Added `DifyToolProvider`, `McpToolProvider` and a trusted-resource `ProviderRegistry`. Probe, Discover, Test and Validate now share Provider result contracts instead of API routes inventing provider-specific behavior.
+- Generic Dify Validate now executes through `DifyToolProvider` and retains the historical test response shape for Console compatibility; validation history records the provider and safe result separately.
+- MCP Provider discover returns a canonical schema hash, forming the basis for the upcoming Discovery Snapshot and Drift comparison.
+- Verification: Python compileall and focused provider/validation/Dify/MCP/registry suite pass (12 tests). No deployment or GitHub push was performed.
