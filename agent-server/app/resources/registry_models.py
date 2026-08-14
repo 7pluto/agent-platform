@@ -25,6 +25,18 @@ class ResourceVersionStatus(StrEnum):
     DEPRECATED = "DEPRECATED"
 
 
+class ResourceValidationType(StrEnum):
+    PROBE = "PROBE"
+    DISCOVER = "DISCOVER"
+    TEST = "TEST"
+    VALIDATE = "VALIDATE"
+
+
+class ResourceValidationStatus(StrEnum):
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+
+
 class ResourceDefinitionCreate(BaseModel):
     resource_type: ResourceType
     slug: str = Field(pattern=r"^[a-z][a-z0-9-]{2,63}$")
@@ -57,3 +69,15 @@ class ResourceVersionRecord(BaseModel):
     created_by: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     published_at: datetime | None = None
+
+
+class ResourceValidationRunRecord(BaseModel):
+    validation_run_id: UUID = Field(default_factory=uuid4)
+    tenant_id: str
+    resource_version_id: UUID
+    validation_type: ResourceValidationType
+    status: ResourceValidationStatus
+    result: dict[str, Any] = Field(default_factory=dict)
+    latency_ms: int | None = Field(default=None, ge=0)
+    created_by: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

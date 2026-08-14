@@ -108,3 +108,10 @@ Stage 4 foundation: resource registry, Agent Assembly V2, worker deployment and 
 - Dify Flow and MCP now use this single outbound boundary. Their existing resource configuration continues to supply the egress allowlist and timeout; Docker service names remain supported while literal localhost is forbidden.
 - Enabled Vue Router and began the incremental App.vue migration. Workspace, Agent chat, Console, Resource detail, Knowledge detail, Agent edit, Run and Governance routes now have stable URLs; direct resource/knowledge links reload their detail state after session bootstrap. Nginx already serves `index.html` for history-mode refreshes.
 - Verification: `vue-tsc --noEmit`, Vite production build and focused backend tests (20 passed) all pass. The only test output warnings are pre-existing Windows permission errors for ignored pytest cache folders.
+
+# 2026-08-14 — V1.5 Iteration B (in progress)
+
+- Added the tenant-RLS `platform_resource_validation_run` audit table and Alembic migration `0024_resource_validation_runs`.
+- Provider lifecycle outcomes now have a durable, safe record: validation type, status, bounded/redacted result, elapsed time and actor. API keys, authorization values, secrets and tokens are replaced before persistence.
+- Dify Tool versions can now be explicitly validated and queried through validation-run APIs. Generic Dify publication is gated on a successful `VALIDATE` outcome; product and compatibility onboarding commands persist their validated outcome before publishing.
+- Verification: Python compileall and focused validation/Dify/registry/workbench suite pass (14 tests).

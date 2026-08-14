@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID, uuid4
 from urllib.parse import urlsplit
+from time import perf_counter
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
@@ -18,12 +19,17 @@ from app.db.session import get_session_factory
 from app.governance.models import GrantAction, GrantEffect, ResourceGrantCreate, ResourceGrantRecord, SubjectType
 from app.iam.models import Principal
 from app.resources.registry_factory import get_resource_registry
-from app.resources.registry_models import ResourceDefinitionCreate, ResourceDefinitionRecord, ResourceType, ResourceVersionCreate, ResourceVersionRecord
+from app.resources.registry_models import (
+    ResourceDefinitionCreate, ResourceDefinitionRecord, ResourceType, ResourceValidationRunRecord,
+    ResourceValidationStatus, ResourceValidationType, ResourceVersionCreate, ResourceVersionRecord,
+)
+from app.resources.validation import get_resource_validation_service
 from app.runtime.dify_flow import DifyFlowClient
 from app.secrets.vault import get_secret_vault
 
 router = APIRouter(tags=["resource-registry"])
 store = get_resource_registry()
+validation_runs = get_resource_validation_service()
 
 
 class DifyApplicationCreate(BaseModel):
@@ -61,6 +67,29 @@ class DifyApplicationPublishResponse(BaseModel):
     resource_version: ResourceVersionRecord
     connection_test: dict
     grants_created: int
+
+
+async def _validate_dify_version(
+    record: ResourceVersionRecord,
+    principal: Principal,
+    validation_type: ResourceValidationType,
+) -> ResourceValidationRunRecord:
+    """Run and retain a safe, tenant-scoped Dify validation outcome."""
+    started = perf_counter()
+    try:
+        result = await (await DifyFlowClient.from_runtime_config(
+            record.config, principal.tenant_id, principal.external_user_id,
+        )).test_connection(str(record.config.get("test_query", "请回复 OK")))
+    except ApiError as exc:
+        return await validation_runs.record(
+            record.resource_version_id, validation_type, ResourceValidationStatus.FAILED,
+            {"code": exc.code, "message": exc.message}, principal,
+            round((perf_counter() - started) * 1000),
+        )
+    return await validation_runs.record(
+        record.resource_version_id, validation_type, ResourceValidationStatus.SUCCEEDED,
+        result, principal, round((perf_counter() - started) * 1000),
+    )
 
 
 def _dify_tool_input_schema(flow_type: str, input_form: list) -> dict:
@@ -204,6 +233,7 @@ async def create_dify_application(request: DifyApplicationCreate, principal: Pri
     }
     definition = await store.create_definition(ResourceDefinitionCreate(resource_type=ResourceType.TOOL, slug=request.slug, display_name=request.display_name, description=request.description, draft_config=config), principal)
     version = await store.create_version(definition.resource_id, ResourceVersionCreate(config=config), principal)
+    await validation_runs.record(version.resource_version_id, ResourceValidationType.VALIDATE, ResourceValidationStatus.SUCCEEDED, connection_test, principal)
     published = await store.publish_version(version.resource_version_id, principal)
     await _save_dify_descriptor(request, published.resource_id, principal)
     governance = get_governance_store()
@@ -258,6 +288,7 @@ async def create_dify_flow_tool(request: DifyFlowToolCreate, principal: Principa
         description=request.description, draft_config=config,
     ), principal)
     version = await store.create_version(definition.resource_id, ResourceVersionCreate(config=config), principal)
+    await validation_runs.record(version.resource_version_id, ResourceValidationType.VALIDATE, ResourceValidationStatus.SUCCEEDED, connection_test, principal)
     published = await store.publish_version(version.resource_version_id, principal)
     await get_governance_store().record_audit(principal, "dify_flow_tool.publish", "TOOL", str(published.resource_version_id), {
         "resource_id": str(published.resource_id), "secret_ref": secret.secret_ref, "fingerprint": secret.fingerprint,
@@ -301,7 +332,8 @@ async def list_resource_versions(resource_id: UUID, principal: Principal = Depen
 async def publish_resource_version(resource_version_id: UUID, principal: Principal = Depends(require_platform_admin)) -> ResourceVersionRecord:
     draft = await store.get_version(resource_version_id, principal)
     if draft.resource_type == ResourceType.TOOL and draft.config.get("kind") == "DIFY_FLOW":
-        await (await DifyFlowClient.from_runtime_config(draft.config, principal.tenant_id, principal.external_user_id)).test_connection(str(draft.config.get("test_query", "请回复 OK")))
+        if not await validation_runs.has_successful_validation(resource_version_id, principal):
+            raise ApiError(409, "RESOURCE_VALIDATION_REQUIRED", "Dify Tool must pass validation before publish")
     record = await store.publish_version(resource_version_id, principal)
     await get_governance_store().record_audit(principal, "resource_version.publish", record.resource_type.value, str(record.resource_version_id), {"content_hash": record.content_hash})
     return record
@@ -312,9 +344,27 @@ async def test_resource_version(resource_version_id: UUID, principal: Principal 
     record = await store.get_version(resource_version_id, principal)
     if record.resource_type != ResourceType.TOOL or record.config.get("kind") != "DIFY_FLOW":
         raise ApiError(422, "RESOURCE_TEST_UNSUPPORTED", "connection test is supported for DIFY_FLOW Tool versions")
-    result = await (await DifyFlowClient.from_runtime_config(record.config, principal.tenant_id, principal.external_user_id)).test_connection(str(record.config.get("test_query", "请回复 OK")))
-    await get_governance_store().record_audit(principal, "resource_version.test", record.resource_type.value, str(record.resource_version_id), result)
-    return result
+    outcome = await _validate_dify_version(record, principal, ResourceValidationType.TEST)
+    await get_governance_store().record_audit(principal, "resource_version.test", record.resource_type.value, str(record.resource_version_id), {"validation_run_id": str(outcome.validation_run_id), "status": outcome.status.value})
+    if outcome.status == ResourceValidationStatus.FAILED:
+        raise ApiError(502, str(outcome.result.get("code", "UPSTREAM_ERROR")), str(outcome.result.get("message", "Dify connection test failed")))
+    return outcome.result
+
+
+@router.post("/resource-versions/{resource_version_id}/validate", response_model=ResourceValidationRunRecord)
+async def validate_resource_version(resource_version_id: UUID, principal: Principal = Depends(require_platform_admin)) -> ResourceValidationRunRecord:
+    record = await store.get_version(resource_version_id, principal)
+    if record.resource_type != ResourceType.TOOL or record.config.get("kind") != "DIFY_FLOW":
+        raise ApiError(422, "RESOURCE_VALIDATION_UNSUPPORTED", "validation is currently supported for DIFY_FLOW Tool versions")
+    outcome = await _validate_dify_version(record, principal, ResourceValidationType.VALIDATE)
+    await get_governance_store().record_audit(principal, "resource_version.validate", record.resource_type.value, str(record.resource_version_id), {"validation_run_id": str(outcome.validation_run_id), "status": outcome.status.value})
+    return outcome
+
+
+@router.get("/resource-versions/{resource_version_id}/validation-runs", response_model=list[ResourceValidationRunRecord])
+async def list_resource_validation_runs(resource_version_id: UUID, principal: Principal = Depends(require_platform_admin_read)) -> list[ResourceValidationRunRecord]:
+    await store.get_version(resource_version_id, principal)
+    return await validation_runs.list(resource_version_id, principal)
 
 
 @router.get("/resource-versions/published", response_model=list[ResourceVersionRecord])

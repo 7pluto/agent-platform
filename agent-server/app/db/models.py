@@ -401,6 +401,27 @@ class ResourceVersionRow(Base):
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class ResourceValidationRunRow(Base):
+    """Auditable outcome of an external resource lifecycle operation."""
+
+    __tablename__ = "platform_resource_validation_run"
+    __table_args__ = (
+        Index("ix_platform_resource_validation_run_tenant_version", "tenant_id", "resource_version_id", "created_at"),
+    )
+
+    validation_run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    resource_version_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("platform_resource_version.resource_version_id", ondelete="CASCADE"), nullable=False
+    )
+    validation_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    result: Mapped[dict] = mapped_column(JSONB().with_variant(JSON, "sqlite"), nullable=False)
+    latency_ms: Mapped[int | None] = mapped_column(nullable=True)
+    created_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class SecretVaultRow(Base):
     """Encrypted tenant secret. APIs never serialize encrypted_value."""
 
