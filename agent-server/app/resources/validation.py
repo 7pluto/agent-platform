@@ -80,9 +80,16 @@ class ResourceValidationService:
                 ).order_by(desc(ResourceValidationRunRow.created_at)))).all()
         return [ResourceValidationRunRecord.model_validate(row, from_attributes=True) for row in rows]
 
-    async def has_successful_validation(self, resource_version_id: UUID, principal: Principal) -> bool:
-        return any(item.status == ResourceValidationStatus.SUCCEEDED and item.validation_type == ResourceValidationType.VALIDATE
-                   for item in await self.list(resource_version_id, principal))
+    async def has_successful_validation(
+        self,
+        resource_version_id: UUID,
+        principal: Principal,
+        validation_type: ResourceValidationType = ResourceValidationType.VALIDATE,
+    ) -> bool:
+        return any(
+            item.status == ResourceValidationStatus.SUCCEEDED and item.validation_type == validation_type
+            for item in await self.list(resource_version_id, principal)
+        )
 
 
 _service = ResourceValidationService()

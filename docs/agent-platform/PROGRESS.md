@@ -150,3 +150,9 @@ Stage 4 foundation: resource registry, Agent Assembly V2, worker deployment and 
 - Fresh MCP discovery now reconciles every managed Tool binding against the current upstream tool list and its registered input schema. Discovery cards expose a safe binding state: available, managed, changed, or missing.
 - A changed schema and a missing upstream tool do not silently create a second Tool resource or erase the original binding. The binding is retained with its observed state so an administrator can review and publish an intentional new immutable Tool version later.
 - Verification: Python compileall and focused MCP/external-binding/provider tests pass (6 passed). No deployment or GitHub push was performed.
+
+# 2026-08-14 V1.5 unified HTTP Tool lifecycle (local only)
+
+- Governed HTTP Tools now participate in the same trusted ProviderRegistry as Dify and MCP. Probe validates immutable endpoint/template/egress configuration without sending user content; Test invokes the fixed capability only with administrator-supplied test input.
+- The generic resource Test API accepts optional structured test input for HTTP Tools, stores the safe provider outcome in validation history and keeps the existing Dify response compatible. Generic publication now refuses an HTTP Tool that has not passed a `TEST` record.
+- Verification: Python compileall and focused HTTP/provider/validation/registry tests pass (12 passed). No deployment or GitHub push was performed.

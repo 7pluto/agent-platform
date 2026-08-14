@@ -96,6 +96,10 @@ class HttpToolPublishResponse(BaseModel):
     test_result: dict
 
 
+class ResourceTestRequest(BaseModel):
+    input: dict = Field(default_factory=dict)
+
+
 async def _validate_dify_version(
     record: ResourceVersionRecord,
     principal: Principal,
@@ -426,28 +430,47 @@ async def publish_resource_version(resource_version_id: UUID, principal: Princip
     if draft.resource_type == ResourceType.TOOL and draft.config.get("kind") == "DIFY_FLOW":
         if not await validation_runs.has_successful_validation(resource_version_id, principal):
             raise ApiError(409, "RESOURCE_VALIDATION_REQUIRED", "Dify Tool must pass validation before publish")
+    if draft.resource_type == ResourceType.TOOL and draft.config.get("kind") == "HTTP":
+        if not await validation_runs.has_successful_validation(resource_version_id, principal, ResourceValidationType.TEST):
+            raise ApiError(409, "RESOURCE_TEST_REQUIRED", "HTTP Tool must pass a test before publish")
     record = await store.publish_version(resource_version_id, principal)
     await get_governance_store().record_audit(principal, "resource_version.publish", record.resource_type.value, str(record.resource_version_id), {"content_hash": record.content_hash})
     return record
 
 
 @router.post("/resource-versions/{resource_version_id}/test")
-async def test_resource_version(resource_version_id: UUID, principal: Principal = Depends(require_platform_admin)) -> dict:
+async def test_resource_version(
+    resource_version_id: UUID,
+    request: ResourceTestRequest | None = None,
+    principal: Principal = Depends(require_platform_admin),
+) -> dict:
     record = await store.get_version(resource_version_id, principal)
-    if record.resource_type != ResourceType.TOOL or record.config.get("kind") != "DIFY_FLOW":
-        raise ApiError(422, "RESOURCE_TEST_UNSUPPORTED", "connection test is supported for DIFY_FLOW Tool versions")
-    outcome = await _validate_dify_version(record, principal, ResourceValidationType.TEST)
+    if record.resource_type != ResourceType.TOOL or record.config.get("kind") not in {"DIFY_FLOW", "HTTP"}:
+        raise ApiError(422, "RESOURCE_TEST_UNSUPPORTED", "test is supported for DIFY_FLOW and governed HTTP Tool versions")
+    if record.config.get("kind") == "DIFY_FLOW":
+        outcome = await _validate_dify_version(record, principal, ResourceValidationType.TEST)
+    else:
+        started = perf_counter()
+        result = await provider_registry.resolve(record.resource_type, record.config, principal).test(record.config, (request.input if request else {}))
+        outcome = await validation_runs.record(
+            record.resource_version_id,
+            ResourceValidationType.TEST,
+            ResourceValidationStatus.SUCCEEDED if result.ok else ResourceValidationStatus.FAILED,
+            result.model_dump(mode="json"),
+            principal,
+            round((perf_counter() - started) * 1000),
+        )
     await get_governance_store().record_audit(principal, "resource_version.test", record.resource_type.value, str(record.resource_version_id), {"validation_run_id": str(outcome.validation_run_id), "status": outcome.status.value})
     if outcome.status == ResourceValidationStatus.FAILED:
-        raise ApiError(502, str(outcome.result.get("code") or outcome.result.get("error_code") or "UPSTREAM_ERROR"), str(outcome.result.get("message", "Dify connection test failed")))
+        raise ApiError(502, str(outcome.result.get("code") or outcome.result.get("error_code") or "UPSTREAM_ERROR"), str(outcome.result.get("message", "resource test failed")))
     return outcome.result.get("result", outcome.result)
 
 
 @router.post("/resource-versions/{resource_version_id}/validate", response_model=ResourceValidationRunRecord)
 async def validate_resource_version(resource_version_id: UUID, principal: Principal = Depends(require_platform_admin)) -> ResourceValidationRunRecord:
     record = await store.get_version(resource_version_id, principal)
-    if record.resource_type != ResourceType.TOOL or record.config.get("kind") != "DIFY_FLOW":
-        raise ApiError(422, "RESOURCE_VALIDATION_UNSUPPORTED", "validation is currently supported for DIFY_FLOW Tool versions")
+    if record.resource_type != ResourceType.TOOL or record.config.get("kind") not in {"DIFY_FLOW", "HTTP"}:
+        raise ApiError(422, "RESOURCE_VALIDATION_UNSUPPORTED", "validation is supported for DIFY_FLOW and governed HTTP Tool versions")
     outcome = await _validate_dify_version(record, principal, ResourceValidationType.VALIDATE)
     await get_governance_store().record_audit(principal, "resource_version.validate", record.resource_type.value, str(record.resource_version_id), {"validation_run_id": str(outcome.validation_run_id), "status": outcome.status.value})
     return outcome

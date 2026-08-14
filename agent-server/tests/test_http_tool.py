@@ -7,6 +7,7 @@ from app.core.errors import ApiError
 from app.iam.models import Principal
 from app.resources.registry_models import ResourceDefinitionCreate, ResourceType
 from app.resources.registry_store import ResourceRegistryStore
+from app.resources.providers.http import HttpToolProvider
 from app.runtime.http_tool import http_tool_client, render_template
 
 
@@ -55,5 +56,19 @@ def test_http_tool_invokes_fixed_target_with_rendered_arguments(monkeypatch: pyt
         assert captured["method"] == "GET"
         assert captured["url"] == "https://api.example.com/base/search?q=leave+policy"
         assert output == {"status_code": 200, "body": {"items": ["A"]}}
+
+    asyncio.run(run())
+
+
+def test_http_tool_provider_probe_returns_safe_configuration_status() -> None:
+    async def run() -> None:
+        provider = HttpToolProvider("tenant", "user")
+        result = await provider.probe({
+            "kind": "HTTP", "tool_name": "search_policy", "endpoint": "https://api.example.com",
+            "path": "/search", "method": "GET", "egress_allowlist": ["api.example.com"],
+        })
+        assert result.ok
+        assert result.provider == "HTTP"
+        assert result.details == {"endpoint_host": "api.example.com"}
 
     asyncio.run(run())
