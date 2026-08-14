@@ -4,6 +4,7 @@ from uuid import uuid4
 from app.core.errors import ApiError
 from app.iam.models import Principal
 from app.resources.bindings import ExternalBindingService
+from app.resources.registry_models import ExternalBindingStatus
 
 
 def _principal(tenant_id: str = "tenant-a") -> Principal:
@@ -31,5 +32,21 @@ def test_discovered_binding_is_unique_per_connection_and_tenant() -> None:
         else:
             raise AssertionError("one discovered tool was bound to two resources")
         assert not await service.list_for_connection(connection_id, _principal("tenant-b"))
+
+    asyncio.run(run())
+
+
+def test_binding_status_can_track_missing_or_changed_provider_objects() -> None:
+    async def run() -> None:
+        service = ExternalBindingService()
+        principal = _principal()
+        record = await service.register_discovered(
+            provider="MCP", connection_resource_id=uuid4(), external_type="TOOL",
+            external_id="customer_search", resource_id=uuid4(), principal=principal,
+        )
+        missing = await service.set_status(record.binding_id, ExternalBindingStatus.MISSING, principal)
+        assert missing.status == ExternalBindingStatus.MISSING
+        restored = await service.set_status(record.binding_id, ExternalBindingStatus.CHANGED, principal)
+        assert restored.status == ExternalBindingStatus.CHANGED
 
     asyncio.run(run())

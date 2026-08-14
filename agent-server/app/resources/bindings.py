@@ -83,6 +83,33 @@ class ExternalBindingService:
                 ))).all()
         return [ResourceExternalBindingRecord.model_validate(row, from_attributes=True) for row in rows]
 
+    async def set_status(
+        self,
+        binding_id: UUID,
+        status: ExternalBindingStatus,
+        principal: Principal,
+    ) -> ResourceExternalBindingRecord:
+        """Persist a discovery observation without altering its resource binding."""
+        if get_settings().storage_mode != "postgres":
+            for key, item in self._memory.items():
+                if item.binding_id == binding_id and item.tenant_id == principal.tenant_id:
+                    updated = item.model_copy(update={"status": status, "updated_at": datetime.now(timezone.utc)})
+                    self._memory[key] = updated
+                    return updated
+            raise ApiError(404, "NOT_FOUND", "external binding was not found")
+        async with get_session_factory()() as session:
+            async with session.begin():
+                await set_local_tenant_context(session, principal.tenant_id, principal.external_user_id)
+                row = await session.scalar(select(ResourceExternalBindingRow).where(
+                    ResourceExternalBindingRow.tenant_id == principal.tenant_id,
+                    ResourceExternalBindingRow.binding_id == binding_id,
+                ))
+                if row is None:
+                    raise ApiError(404, "NOT_FOUND", "external binding was not found")
+                row.status = status.value
+                await session.flush()
+                return ResourceExternalBindingRecord.model_validate(row, from_attributes=True)
+
 
 _service = ExternalBindingService()
 

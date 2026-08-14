@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
@@ -10,7 +12,7 @@ from app.api.dependencies import require_platform_admin, require_platform_admin_
 from app.iam.models import Principal
 from app.mcp.service import mcp_auth_headers, mcp_client
 from app.resources.registry_factory import get_resource_registry
-from app.resources.registry_models import ResourceDefinitionCreate, ResourceExternalBindingRecord, ResourceType, ResourceVersionCreate, ResourceVersionRecord
+from app.resources.registry_models import ExternalBindingStatus, ResourceDefinitionCreate, ResourceExternalBindingRecord, ResourceType, ResourceVersionCreate, ResourceVersionRecord, ResourceVersionStatus
 from app.resources.registry_store import ResourceRegistryStore
 from app.resources.bindings import get_external_binding_service
 from app.secrets.vault import get_secret_vault
@@ -24,6 +26,7 @@ class McpDiscoveredTool(BaseModel):
     description: str | None = None
     input_schema: dict = {}
     managed: bool = False
+    binding_status: ExternalBindingStatus | None = None
 
 
 class McpToolRegistration(BaseModel):
@@ -93,6 +96,35 @@ def _select_discovered_tools(
     return [(selection, by_name[selection.tool_name]) for selection in selections]
 
 
+def _schema_hash(schema: dict) -> str:
+    return hashlib.sha256(json.dumps(schema, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+async def _reconcile_discovery(
+    connection_resource_id: UUID,
+    discovered: list[dict],
+    principal: Principal,
+) -> dict[str, ResourceExternalBindingRecord]:
+    """Mark persisted MCP bindings missing or changed after a fresh discovery."""
+    discovered_by_name = {str(item["name"]): item for item in discovered}
+    current: dict[str, ResourceExternalBindingRecord] = {}
+    registry = get_resource_registry()
+    for binding in await bindings.list_for_connection(connection_resource_id, principal):
+        if binding.external_type != "TOOL":
+            continue
+        item = discovered_by_name.get(binding.external_id)
+        status = ExternalBindingStatus.MISSING
+        if item is not None:
+            versions = await registry.list_versions(binding.resource_id, principal)
+            published = [version for version in versions if version.status == ResourceVersionStatus.PUBLISHED]
+            registered_schema = published[-1].config.get("input_schema", {}) if published else {}
+            status = ExternalBindingStatus.MANAGED if _schema_hash(registered_schema) == _schema_hash(item.get("inputSchema", {})) else ExternalBindingStatus.CHANGED
+        if binding.status != status:
+            binding = await bindings.set_status(binding.binding_id, status, principal)
+        current[binding.external_id] = binding
+    return current
+
+
 @router.post("/mcp-connections", response_model=ResourceVersionRecord, status_code=201)
 async def create_mcp_connection(request: McpConnectionCreate, principal: Principal = Depends(require_platform_admin)) -> ResourceVersionRecord:
     host = urlsplit(request.endpoint).hostname
@@ -125,14 +157,14 @@ async def discover_mcp_tools(resource_version_id: UUID, principal: Principal = D
     ResourceRegistryStore._validate(ResourceType.MCP_CONNECTION, connection.config)
     headers = await mcp_auth_headers(connection.config, principal.tenant_id, principal.external_user_id)
     tools = await mcp_client.discover(connection.config["endpoint"], float(connection.config.get("timeout_seconds", 10)), headers, connection.config["egress_allowlist"])
-    existing = await bindings.list_for_connection(connection.resource_id, principal)
-    managed_external_ids = {binding.external_id for binding in existing if binding.external_type == "TOOL"}
+    existing = await _reconcile_discovery(connection.resource_id, tools, principal)
     return [
         McpDiscoveredTool(
             name=item["name"],
             description=item.get("description"),
             input_schema=item.get("inputSchema", {}),
-            managed=item["name"] in managed_external_ids,
+            managed=item["name"] in existing,
+            binding_status=existing[item["name"]].status if item["name"] in existing else None,
         )
         for item in tools
     ]

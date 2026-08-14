@@ -144,3 +144,9 @@ Stage 4 foundation: resource registry, Agent Assembly V2, worker deployment and 
 - HTTP Tools can optionally resolve an API key only from the tenant Vault. Every product creation performs an invocation test before publishing, records a safe validation outcome, and writes only endpoint host/method/path to the audit record.
 - The Resource Center’s existing add-resource wizard now exposes **Tool type → Governed HTTP Tool** with fixed API fields, input schema, Query/Body templates and test arguments. It uses the same semantic descriptor and RuoYi publication scope as every other Tool.
 - Verification: Python compileall, focused HTTP Tool/resource/runtime tests (14 passed), and Vue production build pass. No deployment or GitHub push was performed.
+
+# 2026-08-14 V1.5 MCP discovery drift status (local only)
+
+- Fresh MCP discovery now reconciles every managed Tool binding against the current upstream tool list and its registered input schema. Discovery cards expose a safe binding state: available, managed, changed, or missing.
+- A changed schema and a missing upstream tool do not silently create a second Tool resource or erase the original binding. The binding is retained with its observed state so an administrator can review and publish an intentional new immutable Tool version later.
+- Verification: Python compileall and focused MCP/external-binding/provider tests pass (6 passed). No deployment or GitHub push was performed.
