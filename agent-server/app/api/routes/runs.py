@@ -3,12 +3,15 @@ from __future__ import annotations
 import asyncio
 import json
 import json as json_module
+from collections import Counter
+from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, Query, Request
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
-from app.api.dependencies import ensure_resource_action, require_fresh_mutation_principal, require_fresh_principal
+from app.api.dependencies import ensure_resource_action, require_fresh_mutation_principal, require_fresh_principal, require_platform_admin_read
 from app.config import get_settings
 from app.control_plane.store_factory import get_control_plane_store
 from app.control_plane.specification import model_version_reference
@@ -31,6 +34,48 @@ conversation_store = get_conversation_store()
 governance_store = get_governance_store()
 runtime_worker = get_runtime_worker()
 resource_store = get_resource_store()
+
+
+class RunObservabilitySummary(BaseModel):
+    sampled_runs: int
+    status_counts: dict[str, int]
+    terminal_runs: int
+    completion_rate: float | None = None
+    average_duration_ms: int | None = None
+    tool_calls: int
+    rag_retrievals: int
+    denied_capability_calls: int
+    failed_runs: int
+    generated_at: datetime
+
+
+def summarize_run_observability(records: list[tuple[RunRecord, list[RunEvent]]]) -> RunObservabilitySummary:
+    """Aggregate trace metadata only; prompts, outputs and tool arguments stay private."""
+    statuses = Counter(record.status.value for record, _ in records)
+    durations: list[float] = []
+    tool_calls = rag_retrievals = denied = 0
+    terminal = {"COMPLETED", "FAILED", "CANCELLED"}
+    for record, events in records:
+        started = next((event.occurred_at for event in events if event.event == "run.started"), None)
+        finished = next((event.occurred_at for event in reversed(events) if event.event in {"run.completed", "run.failed", "run.cancelled"}), None)
+        if started and finished and finished >= started:
+            durations.append((finished - started).total_seconds() * 1000)
+        tool_calls += sum(1 for event in events if event.event == "tool.started")
+        rag_retrievals += sum(1 for event in events if event.event == "rag.retrieved")
+        denied += sum(1 for event in events if event.event == "tool.denied")
+    terminal_runs = sum(statuses[value] for value in terminal)
+    return RunObservabilitySummary(
+        sampled_runs=len(records),
+        status_counts=dict(statuses),
+        terminal_runs=terminal_runs,
+        completion_rate=round(statuses["COMPLETED"] / terminal_runs, 4) if terminal_runs else None,
+        average_duration_ms=round(sum(durations) / len(durations)) if durations else None,
+        tool_calls=tool_calls,
+        rag_retrievals=rag_retrievals,
+        denied_capability_calls=denied,
+        failed_runs=statuses["FAILED"],
+        generated_at=datetime.now().astimezone(),
+    )
 
 
 @router.post("/deployments/{deployment_id}/runs", response_model=RunRecord, status_code=202)
@@ -139,6 +184,17 @@ async def list_runs(
     principal: Principal = Depends(require_fresh_principal),
 ) -> list[RunRecord]:
     return await run_store.list_for_principal(principal, limit)
+
+
+@router.get("/observability/runs/summary", response_model=RunObservabilitySummary)
+async def run_observability_summary(
+    limit: int = Query(default=500, ge=1, le=2_000),
+    principal: Principal = Depends(require_platform_admin_read),
+) -> RunObservabilitySummary:
+    """Admin-only tenant metrics derived from Run events, never raw conversation content."""
+    runs = await run_store.list_for_tenant(principal, limit)
+    records = [(record, await run_store.events_for_tenant(record.run_id, principal)) for record in runs]
+    return summarize_run_observability(records)
 
 
 @router.get("/runs/{run_id}/detail", response_model=RunDetail)

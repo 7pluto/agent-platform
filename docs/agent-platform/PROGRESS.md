@@ -156,3 +156,9 @@ Stage 4 foundation: resource registry, Agent Assembly V2, worker deployment and 
 - Governed HTTP Tools now participate in the same trusted ProviderRegistry as Dify and MCP. Probe validates immutable endpoint/template/egress configuration without sending user content; Test invokes the fixed capability only with administrator-supplied test input.
 - The generic resource Test API accepts optional structured test input for HTTP Tools, stores the safe provider outcome in validation history and keeps the existing Dify response compatible. Generic publication now refuses an HTTP Tool that has not passed a `TEST` record.
 - Verification: Python compileall and focused HTTP/provider/validation/registry tests pass (12 passed). No deployment or GitHub push was performed.
+
+# 2026-08-14 V1.5 run observability baseline (local only)
+
+- Added an administrator-only tenant Run observability summary. It aggregates only Run status and trace event metadata: sampled/terminal count, completion rate, average duration, tool calls, RAG retrievals, denied capability calls and failures. It never returns prompts, answers, tool arguments, document content or secrets.
+- Added the **运行观测** panel to Console overview with a manual refresh action. It is deliberately a compact operational baseline rather than a separate analytics product.
+- Verification: Python compileall and focused Runtime/Worker/validation tests pass (10 passed); Vue type check and production build pass. No deployment or GitHub push was performed.

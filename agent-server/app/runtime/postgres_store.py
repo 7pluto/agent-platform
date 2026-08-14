@@ -125,6 +125,19 @@ class PostgresRunStore:
                 )
                 return [self._to_record(row) for row in rows.all()]
 
+    async def list_for_tenant(self, principal: Principal, limit: int = 500) -> list[RunRecord]:
+        """Tenant-scoped administrative listing; caller enforces administrator role."""
+        async with get_session_factory()() as session:
+            async with session.begin():
+                await set_local_tenant_context(session, principal.tenant_id, principal.external_user_id)
+                rows = await session.scalars(
+                    select(RunRow)
+                    .where(RunRow.tenant_id == principal.tenant_id)
+                    .order_by(RunRow.created_at.desc())
+                    .limit(limit)
+                )
+                return [self._to_record(row) for row in rows.all()]
+
     async def claim_next_for_worker(self, worker_id: str) -> RunRecord | None:
         """Claim only a queue row, then switch immediately to a tenant transaction.
 
@@ -189,6 +202,18 @@ class PostgresRunStore:
                     select(RunEventRow)
                     .where(RunEventRow.run_id == run_id, RunEventRow.sequence > after)
                     .order_by(RunEventRow.sequence)
+                )
+                return [self._to_event(item) for item in result.all()]
+
+    async def events_for_tenant(self, run_id: UUID, principal: Principal) -> list[RunEvent]:
+        async with get_session_factory()() as session:
+            async with session.begin():
+                await set_local_tenant_context(session, principal.tenant_id, principal.external_user_id)
+                row = await session.get(RunRow, run_id)
+                if row is None or row.tenant_id != principal.tenant_id:
+                    raise ApiError(404, "NOT_FOUND", "run was not found")
+                result = await session.scalars(
+                    select(RunEventRow).where(RunEventRow.run_id == run_id).order_by(RunEventRow.sequence)
                 )
                 return [self._to_event(item) for item in result.all()]
 

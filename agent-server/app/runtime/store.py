@@ -69,11 +69,27 @@ class RunStore:
                 if record.tenant_id == principal.tenant_id and record.user_id == principal.external_user_id
             ][:limit]
 
+    async def list_for_tenant(self, principal: Principal, limit: int = 500) -> list[RunRecord]:
+        """Administrative, tenant-only read used by observability summaries."""
+        async with self._lock:
+            return [
+                record.model_copy(deep=True)
+                for record in sorted(self._runs.values(), key=lambda item: item.created_at, reverse=True)
+                if record.tenant_id == principal.tenant_id
+            ][:limit]
+
     async def events(self, run_id: UUID, principal: Principal, after: int = 0) -> list[RunEvent]:
         async with self._lock:
             record = self._runs.get(run_id)
             self._check_owner(record, principal)
             return [event.model_copy(deep=True) for event in self._events[run_id] if event.sequence > after]
+
+    async def events_for_tenant(self, run_id: UUID, principal: Principal) -> list[RunEvent]:
+        async with self._lock:
+            record = self._runs.get(run_id)
+            if record is None or record.tenant_id != principal.tenant_id:
+                raise ApiError(404, "NOT_FOUND", "run was not found")
+            return [event.model_copy(deep=True) for event in self._events[run_id]]
 
     async def cancel(self, run_id: UUID, principal: Principal) -> RunRecord:
         async with self._lock:

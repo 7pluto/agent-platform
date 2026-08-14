@@ -11,10 +11,10 @@ from app.runtime.adapter import (
     RuntimeContext,
     RuntimeExecutor,
 )
-from app.api.routes.runs import _parse_last_event_id
+from app.api.routes.runs import _parse_last_event_id, summarize_run_observability
 from app.core.errors import ApiError
 from app.runtime.manifest import build_execution_manifest
-from app.runtime.models import RunRecord
+from app.runtime.models import RunEvent, RunRecord, RunStatus
 
 
 def _run_record() -> RunRecord:
@@ -103,6 +103,22 @@ def test_last_event_id_parser_rejects_invalid_values() -> None:
             assert exc.code == "INVALID_LAST_EVENT_ID"
         else:
             raise AssertionError("invalid Last-Event-ID was accepted")
+
+
+def test_run_observability_aggregates_only_safe_trace_metadata() -> None:
+    record = _run_record().model_copy(update={"status": RunStatus.COMPLETED})
+    start = datetime(2026, 8, 14, 10, 0, tzinfo=timezone.utc)
+    events = [
+        RunEvent(sequence=1, event="run.started", run_id=record.run_id, thread_id=record.thread_id, trace_id="t", occurred_at=start),
+        RunEvent(sequence=2, event="tool.started", run_id=record.run_id, thread_id=record.thread_id, trace_id="t", occurred_at=start, data={"arguments": {"secret": "never summarized"}}),
+        RunEvent(sequence=3, event="rag.retrieved", run_id=record.run_id, thread_id=record.thread_id, trace_id="t", occurred_at=start),
+        RunEvent(sequence=4, event="tool.denied", run_id=record.run_id, thread_id=record.thread_id, trace_id="t", occurred_at=start),
+        RunEvent(sequence=5, event="run.completed", run_id=record.run_id, thread_id=record.thread_id, trace_id="t", occurred_at=start.replace(second=2)),
+    ]
+    summary = summarize_run_observability([(record, events)])
+    assert summary.completion_rate == 1
+    assert summary.average_duration_ms == 2_000
+    assert (summary.tool_calls, summary.rag_retrievals, summary.denied_capability_calls) == (1, 1, 1)
 
 
 def test_openai_runtime_recovers_from_malformed_tool_arguments(monkeypatch) -> None:

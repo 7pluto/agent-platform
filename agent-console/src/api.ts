@@ -63,6 +63,18 @@ export interface RunDetail {
   manifest: ExecutionManifest
   events: RunEvent[]
 }
+export interface RunObservabilitySummary {
+  sampled_runs: number
+  status_counts: Record<string, number>
+  terminal_runs: number
+  completion_rate?: number | null
+  average_duration_ms?: number | null
+  tool_calls: number
+  rag_retrievals: number
+  denied_capability_calls: number
+  failed_runs: number
+  generated_at: string
+}
 export interface MemoryItem {
   memory_id: string
   deployment_id: string
@@ -444,6 +456,7 @@ export const api = {
     },
   ),
   listRuns: () => request<RunRecord[]>('/api/v1/runs'),
+  runObservability: () => request<RunObservabilitySummary>('/api/v1/observability/runs/summary'),
   runDetail: (runId: string) => request<RunDetail>(`/api/v1/runs/${runId}/detail`),
   events: async (runId: string, csrf: string, onEvent?: (event: RunEvent) => void) => {
     const response = await fetch(`/api/v1/runs/${runId}/events?follow=true`, {

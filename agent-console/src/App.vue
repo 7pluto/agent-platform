@@ -6,7 +6,7 @@ import {
   api, type AgentWorkbenchItem, type CatalogItem, type ConfigurationDraft,
   type ConfigurationValidation, type ConversationMessage, type ConversationRecord,
   type DeploymentCapabilities, type IamSubject, type IngestJob, type KnowledgeDocument, type KnowledgeIndex,
-  type KnowledgeOverview, type MemoryItem, type Principal, type ResourceDetail, type ResourceListItem, type RunEvent,
+  type KnowledgeOverview, type MemoryItem, type Principal, type ResourceDetail, type ResourceListItem, type RunEvent, type RunObservabilitySummary,
 } from './api'
 import AgentModuleBoard from './components/AgentModuleBoard.vue'
 
@@ -36,6 +36,7 @@ const consoleView = ref<ConsoleView>('overview')
 const agents = ref<AgentWorkbenchItem[]>([])
 const resources = ref<ResourceListItem[]>([])
 const catalog = ref<CatalogItem[]>([])
+const observability = ref<RunObservabilitySummary | null>(null)
 const selectedAgent = ref<AgentWorkbenchItem | null>(null)
 const selectedResource = ref<ResourceDetail | null>(null)
 const selectedKnowledge = ref<KnowledgeOverview | null>(null)
@@ -216,9 +217,13 @@ async function loadSession() {
 async function logout() { await api.logout(); principal.value = null; selectedAgent.value = null; selectedResource.value = null }
 
 async function refreshData() {
-  await Promise.all([loadAgents(), loadResources(), loadCatalog()])
+  await Promise.all([loadAgents(), loadResources(), loadCatalog(), loadObservability()])
 }
 async function loadCatalog() { if (isAdmin.value) catalog.value = await api.catalog() }
+async function loadObservability() {
+  if (!isAdmin.value) { observability.value = null; return }
+  try { observability.value = await api.runObservability() } catch { observability.value = null }
+}
 async function openResourceWizard() {
   resourceComposerOpen.value = true; resourceWizardStep.value = 1
   difyPublishResult.value = null
@@ -945,6 +950,16 @@ onMounted(loadSession)
 <span>当前无阻断告警</span>
 </article>
 </div>
+<section class="product-card overview-section observability-panel">
+<div class="section-heading"><div><h2>运行观测</h2><p>仅汇总状态与事件计数，不显示对话内容、工具参数或密钥。</p></div><button class="button ghost" @click="loadObservability">刷新指标</button></div>
+<div v-if="observability" class="metric-grid compact-metrics">
+<article class="metric"><small>采样 Run</small><strong>{{ observability.sampled_runs }}</strong><span>最近租户运行记录</span></article>
+<article class="metric"><small>完成率</small><strong>{{ observability.completion_rate == null ? '—' : `${Math.round(observability.completion_rate * 100)}%` }}</strong><span>终态 {{ observability.terminal_runs }} 次</span></article>
+<article class="metric"><small>平均耗时</small><strong>{{ observability.average_duration_ms == null ? '—' : `${(observability.average_duration_ms / 1000).toFixed(1)}s` }}</strong><span>从启动到终态</span></article>
+<article class="metric"><small>能力调用</small><strong>{{ observability.tool_calls }}</strong><span>RAG {{ observability.rag_retrievals }} · 拒绝 {{ observability.denied_capability_calls }}</span></article>
+</div>
+<p v-else class="muted">暂无可展示的运行观测数据，或当前账号无管理权限。</p>
+</section>
 <section class="product-card overview-section">
 <div class="section-heading">
 <div>
