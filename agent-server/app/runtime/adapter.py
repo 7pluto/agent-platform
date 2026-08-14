@@ -15,7 +15,7 @@ from app.core.errors import ApiError
 from app.resources.openai_compatible import OpenAICompatibleModel
 from app.runtime.native_tools import native_tools
 from app.memory.store import MemoryStore
-from app.knowledge.service import get_knowledge_file_service
+from app.knowledge.providers import knowledge_provider_registry
 from app.iam.models import Principal
 from app.resources.registry_factory import get_resource_registry
 from app.resources.registry_models import ResourceType
@@ -304,10 +304,12 @@ class OpenAICompatibleRuntimeAdapter(RuntimeAdapter):
                 # this branch, so this does not disclose restricted KB names.
                 definition = knowledge_definitions.get(UUID(resource.resource_id))
                 knowledge_name = definition.display_name if definition else "knowledge base"
+                version = await get_resource_registry().get_version(UUID(resource.version_id), principal, published=True)
                 name = f"knowledge_search_{str(resource.version_id).replace('-', '')[:8]}"
                 configs[name] = {
                     "kind": "KNOWLEDGE",
                     "knowledge_version_id": resource.version_id,
+                    "knowledge_config": version.config,
                     "resource_version_id": resource.version_id,
                     "use_allowed": resource.use_allowed,
                     "resource_type": ResourceType.KNOWLEDGE.value,
@@ -395,9 +397,20 @@ class OpenAICompatibleRuntimeAdapter(RuntimeAdapter):
             principal = Principal(provider="runtime", external_user_id=context.run.user_id, external_org_id="runtime", tenant_id=context.run.tenant_id, display_name="Runtime")
             query = str(arguments.get("query") or context.run.message)
             top_k = max(1, min(int(arguments.get("top_k", 3)), 5))
-            index, hits = await get_knowledge_file_service().retrieval_test(principal, UUID(str(config["knowledge_version_id"])), query, top_k)
-            await emit("rag.retrieved", {"knowledge_version_id": config["knowledge_version_id"], "index_version_id": str(index.index_version_id), "chunk_count": len(hits), "query": query})
-            return {"index_version_id": str(index.index_version_id), "hits": hits}
+            result = await knowledge_provider_registry.resolve(dict(config.get("knowledge_config") or {}), principal).search(
+                knowledge_version_id=str(config["knowledge_version_id"]),
+                config=dict(config.get("knowledge_config") or {}),
+                query=query,
+                top_k=top_k,
+            )
+            await emit("rag.retrieved", {
+                "knowledge_version_id": config["knowledge_version_id"],
+                "provider": result.provider,
+                "index_version_id": result.metadata.get("index_version_id"),
+                "chunk_count": len(result.hits),
+                "query": query,
+            })
+            return result.model_dump(mode="json")
         raise ApiError(422, "INVALID_TOOL_CONFIG", "tool config is not executable")
 
     @staticmethod

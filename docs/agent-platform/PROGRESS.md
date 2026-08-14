@@ -162,3 +162,9 @@ Stage 4 foundation: resource registry, Agent Assembly V2, worker deployment and 
 - Added an administrator-only tenant Run observability summary. It aggregates only Run status and trace event metadata: sampled/terminal count, completion rate, average duration, tool calls, RAG retrievals, denied capability calls and failures. It never returns prompts, answers, tool arguments, document content or secrets.
 - Added the **运行观测** panel to Console overview with a manual refresh action. It is deliberately a compact operational baseline rather than a separate analytics product.
 - Verification: Python compileall and focused Runtime/Worker/validation tests pass (10 passed); Vue type check and production build pass. No deployment or GitHub push was performed.
+
+# 2026-08-14 V1.5 KnowledgeProvider local extraction (local only)
+
+- Introduced the provider-neutral `KnowledgeProvider` contract with normalized hit/result models. `LocalKnowledgeProvider` now wraps the existing MinIO, Embedding and pgvector retrieval implementation without changing its tenant/ACL behavior.
+- Runtime Knowledge execution now resolves a trusted provider from the immutable Knowledge resource configuration instead of importing the local Knowledge service. Existing Knowledge resources default to `LOCAL`, so no migration of current configurations is required.
+- Verification: Python compileall and focused Knowledge Provider/Runtime/Worker tests pass (10 passed). No deployment or GitHub push was performed.
