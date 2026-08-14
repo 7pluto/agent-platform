@@ -168,3 +168,9 @@ Stage 4 foundation: resource registry, Agent Assembly V2, worker deployment and 
 - Introduced the provider-neutral `KnowledgeProvider` contract with normalized hit/result models. `LocalKnowledgeProvider` now wraps the existing MinIO, Embedding and pgvector retrieval implementation without changing its tenant/ACL behavior.
 - Runtime Knowledge execution now resolves a trusted provider from the immutable Knowledge resource configuration instead of importing the local Knowledge service. Existing Knowledge resources default to `LOCAL`, so no migration of current configurations is required.
 - Verification: Python compileall and focused Knowledge Provider/Runtime/Worker tests pass (10 passed). No deployment or GitHub push was performed.
+
+# 2026-08-14 V1.5 Remote HTTP Knowledge provider (local only)
+
+- Added `REMOTE_HTTP` Knowledge configuration and provider. A published Knowledge resource fixes its base endpoint, search path, request field mapping, response field mapping, egress allowlist and optional Vault-backed authentication. Runtime exposes only `query` and `top_k` to the model.
+- Remote responses are normalized into the common Knowledge hit model; unsupported/malformed response shapes fail safely. The same Runtime path now handles local and remote Knowledge without provider-specific conditionals.
+- Verification: Python compileall and focused Knowledge Provider/resource/Runtime tests pass (14 passed). No deployment or GitHub push was performed.

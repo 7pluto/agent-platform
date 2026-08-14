@@ -154,6 +154,9 @@ class ResourceRegistryStore:
             if not isinstance(categories, list) or not all(isinstance(item, str) and item.strip() for item in categories):
                 raise ApiError(422, "INVALID_MEMORY_POLICY", "allowed_categories must be a list of non-empty strings")
         if resource_type == ResourceType.KNOWLEDGE:
+            if str(config.get("provider", "LOCAL")).upper() == "REMOTE_HTTP":
+                ResourceRegistryStore._validate_remote_http_knowledge(config)
+                return
             reference = config.get("embedding_model_version_id")
             if not isinstance(reference, str):
                 raise ApiError(422, "EMBEDDING_MODEL_REQUIRED", "Knowledge requires embedding_model_version_id")
@@ -161,6 +164,31 @@ class ResourceRegistryStore:
                 UUID(reference)
             except ValueError as exc:
                 raise ApiError(422, "INVALID_MODEL_REFERENCE", "embedding_model_version_id must be a UUID") from exc
+
+    @staticmethod
+    def _validate_remote_http_knowledge(config: dict) -> None:
+        endpoint = config.get("endpoint")
+        if not isinstance(endpoint, str):
+            raise ApiError(422, "INVALID_REMOTE_KNOWLEDGE_CONFIG", "remote knowledge endpoint is required")
+        parsed = urlsplit(endpoint)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ApiError(422, "INVALID_REMOTE_KNOWLEDGE_CONFIG", "remote knowledge endpoint must be a clean HTTP(S) base URL")
+        allowlist = config.get("egress_allowlist")
+        if not isinstance(allowlist, list) or not allowlist or parsed.hostname.lower().rstrip(".") not in {str(item).lower().rstrip(".") for item in allowlist}:
+            raise ApiError(422, "REMOTE_KNOWLEDGE_EGRESS_FORBIDDEN", "remote knowledge endpoint must be allowlisted")
+        path = config.get("search_path", "/search")
+        if not isinstance(path, str) or not path.startswith("/") or ".." in path or "://" in path or "?" in path or "#" in path:
+            raise ApiError(422, "INVALID_REMOTE_KNOWLEDGE_CONFIG", "search_path must be a fixed absolute path")
+        if config.get("method", "POST") not in {"GET", "POST"}:
+            raise ApiError(422, "INVALID_REMOTE_KNOWLEDGE_CONFIG", "remote knowledge method must be GET or POST")
+        mapping = config.get("response_mapping", {})
+        if not isinstance(mapping, dict) or not isinstance(mapping.get("content_field", "content"), str):
+            raise ApiError(422, "INVALID_REMOTE_KNOWLEDGE_CONFIG", "response_mapping must define content_field")
+        secret_ref = config.get("secret_ref")
+        if secret_ref is not None:
+            if not isinstance(secret_ref, str):
+                raise ApiError(422, "INVALID_SECRET_REF", "remote knowledge secret_ref must be a reference")
+            validate_secret_ref(secret_ref)
 
     @staticmethod
     def _validate_dify_flow(config: dict) -> None:
