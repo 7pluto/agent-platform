@@ -305,11 +305,20 @@ class OpenAICompatibleRuntimeAdapter(RuntimeAdapter):
                 definition = knowledge_definitions.get(UUID(resource.resource_id))
                 knowledge_name = definition.display_name if definition else "knowledge base"
                 version = await get_resource_registry().get_version(UUID(resource.version_id), principal, published=True)
+                knowledge_config = version.config
+                if str(knowledge_config.get("provider", "LOCAL")).upper() == "RAGFLOW":
+                    connection_id = knowledge_config.get("connection_version_id")
+                    if not isinstance(connection_id, str):
+                        raise ApiError(422, "INVALID_RAGFLOW_KNOWLEDGE_CONFIG", "RAGFlow Knowledge is missing its connection version")
+                    connection = await get_resource_registry().get_version(UUID(connection_id), principal, published=True)
+                    if connection.resource_type != ResourceType.KNOWLEDGE_CONNECTION:
+                        raise ApiError(422, "INVALID_RAGFLOW_KNOWLEDGE_CONFIG", "RAGFlow Knowledge connection must be KNOWLEDGE_CONNECTION")
+                    knowledge_config = {**knowledge_config, **connection.config}
                 name = f"knowledge_search_{str(resource.version_id).replace('-', '')[:8]}"
                 configs[name] = {
                     "kind": "KNOWLEDGE",
                     "knowledge_version_id": resource.version_id,
-                    "knowledge_config": version.config,
+                    "knowledge_config": knowledge_config,
                     "resource_version_id": resource.version_id,
                     "use_allowed": resource.use_allowed,
                     "resource_type": ResourceType.KNOWLEDGE.value,

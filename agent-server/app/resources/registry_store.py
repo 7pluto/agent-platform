@@ -138,6 +138,20 @@ class ResourceRegistryStore:
                 scheme = config.get("auth_scheme", "Bearer")
                 if not isinstance(header, str) or not header.strip() or not isinstance(scheme, str):
                     raise ApiError(422, "INVALID_MCP_CONNECTION", "MCP auth header and scheme are invalid")
+        if resource_type == ResourceType.KNOWLEDGE_CONNECTION:
+            endpoint = config.get("endpoint")
+            if config.get("provider") != "RAGFLOW" or not isinstance(endpoint, str):
+                raise ApiError(422, "INVALID_KNOWLEDGE_CONNECTION", "knowledge connection requires provider=RAGFLOW and endpoint")
+            parsed = urlsplit(endpoint)
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+                raise ApiError(422, "INVALID_KNOWLEDGE_CONNECTION", "RAGFlow endpoint must be an HTTP(S) URL without embedded credentials")
+            allowlist = config.get("egress_allowlist")
+            if not isinstance(allowlist, list) or parsed.hostname.lower().rstrip(".") not in {str(item).lower().rstrip(".") for item in allowlist}:
+                raise ApiError(422, "RAGFLOW_EGRESS_FORBIDDEN", "RAGFlow endpoint must be allowlisted")
+            secret_ref = config.get("secret_ref")
+            if not isinstance(secret_ref, str):
+                raise ApiError(422, "INVALID_KNOWLEDGE_CONNECTION", "RAGFlow connection requires secret_ref")
+            validate_secret_ref(secret_ref)
         if resource_type == ResourceType.MEMORY_POLICY:
             if config.get("write_mode", "EXPLICIT") not in {"EXPLICIT", "POST_RUN_EXTRACT"}:
                 raise ApiError(422, "INVALID_MEMORY_POLICY", "unsupported memory write mode")
@@ -156,6 +170,15 @@ class ResourceRegistryStore:
         if resource_type == ResourceType.KNOWLEDGE:
             if str(config.get("provider", "LOCAL")).upper() == "REMOTE_HTTP":
                 ResourceRegistryStore._validate_remote_http_knowledge(config)
+                return
+            if str(config.get("provider", "LOCAL")).upper() == "RAGFLOW":
+                connection, dataset = config.get("connection_version_id"), config.get("external_dataset_id")
+                if not isinstance(connection, str) or not isinstance(dataset, str) or not dataset.strip():
+                    raise ApiError(422, "INVALID_RAGFLOW_KNOWLEDGE_CONFIG", "RAGFlow Knowledge requires a connection version and discovered dataset id")
+                try:
+                    UUID(connection)
+                except ValueError as exc:
+                    raise ApiError(422, "INVALID_RAGFLOW_KNOWLEDGE_CONFIG", "connection_version_id must be a UUID") from exc
                 return
             reference = config.get("embedding_model_version_id")
             if not isinstance(reference, str):

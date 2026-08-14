@@ -7,6 +7,7 @@ from app.iam.models import Principal
 from app.knowledge.providers.base import KnowledgeProvider
 from app.knowledge.providers.local import LocalKnowledgeProvider
 from app.knowledge.providers.remote_http import RemoteHttpKnowledgeProvider
+from app.knowledge.providers.ragflow import RagflowKnowledgeProvider
 
 
 class KnowledgeProviderRegistry:
@@ -17,6 +18,8 @@ class KnowledgeProviderRegistry:
             return LocalKnowledgeProvider(principal)
         if provider == "REMOTE_HTTP":
             return RemoteHttpKnowledgeProvider(principal)
+        if provider == "RAGFLOW":
+            return RagflowKnowledgeProvider(principal)
         raise ApiError(422, "KNOWLEDGE_PROVIDER_NOT_SUPPORTED", f"knowledge provider is not supported: {provider}")
 
 

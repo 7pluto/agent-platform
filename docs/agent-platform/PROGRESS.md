@@ -174,3 +174,9 @@ Stage 4 foundation: resource registry, Agent Assembly V2, worker deployment and 
 - Added `REMOTE_HTTP` Knowledge configuration and provider. A published Knowledge resource fixes its base endpoint, search path, request field mapping, response field mapping, egress allowlist and optional Vault-backed authentication. Runtime exposes only `query` and `top_k` to the model.
 - Remote responses are normalized into the common Knowledge hit model; unsupported/malformed response shapes fail safely. The same Runtime path now handles local and remote Knowledge without provider-specific conditionals.
 - Verification: Python compileall and focused Knowledge Provider/resource/Runtime tests pass (14 passed). No deployment or GitHub push was performed.
+
+# 2026-08-14 V1.5 RAGFlow Knowledge connection (local only)
+
+- Added `KNOWLEDGE_CONNECTION` for RAGFlow. The connection keeps its endpoint allowlist and one Vault-backed API-key reference; Dataset discovery uses the supported RAGFlow dataset endpoint and never exposes a Dataset ID to an Agent model.
+- An administrator can register one currently discovered Dataset as one immutable `KNOWLEDGE` resource. Runtime resolves that resource through its trusted connection and issues retrieval only against its fixed external Dataset ID.
+- Verification: Python compileall and focused Knowledge Provider/resource/Runtime tests pass (14 passed). No deployment or GitHub push was performed.
