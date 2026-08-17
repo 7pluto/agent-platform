@@ -153,7 +153,7 @@ class ResourceDetail(BaseModel):
 class ResourceDescriptorUpdate(BaseModel):
     owner_user_id: str = Field(min_length=1, max_length=128)
     owner_dept_id: str | None = Field(default=None, max_length=128)
-    source_type: str = Field(default="PLATFORM_NATIVE", pattern=r"^(PLATFORM_NATIVE|OPENAI_COMPATIBLE|MCP|DIFY|IMPORT)$")
+    source_type: str = Field(default="PLATFORM_NATIVE", pattern=r"^(PLATFORM_NATIVE|OPENAI_COMPATIBLE|MCP|DIFY|RAGFLOW|REMOTE_HTTP|HTTP|IMPORT)$")
     source_ref: str | None = Field(default=None, max_length=256)
     usage_guidance: str | None = Field(default=None, max_length=4_000)
     one_line_summary: str = Field(min_length=1, max_length=256)
@@ -187,6 +187,11 @@ class KnowledgeOverview(BaseModel):
     resource_version_id: UUID
     display_name: str
     description: str | None = None
+    provider: str = "LOCAL"
+    provider_display_name: str = "平台文件知识库"
+    source_summary: str | None = None
+    connection_display_name: str | None = None
+    supported_operations: list[str] = Field(default_factory=list)
     active_index_version: int | None = None
     active_index_status: str | None = None
     embedding_model: str | None = None
@@ -264,8 +269,11 @@ def _summary(resource_type: str, config: dict[str, Any]) -> str:
         return str(config.get("description") or config.get("native_name") or config.get("tool_name") or "Tool")
     if resource_type == "MCP_CONNECTION":
         return "MCP connection"
+    if resource_type == "KNOWLEDGE_CONNECTION":
+        return "External Knowledge connection"
     if resource_type == "KNOWLEDGE":
-        return "Enterprise knowledge base"
+        provider = str(config.get("provider") or "LOCAL").upper()
+        return {"RAGFLOW": "RAGFlow external dataset", "REMOTE_HTTP": "Remote knowledge retrieval"}.get(provider, "Enterprise knowledge base")
     if resource_type == "MEMORY_POLICY":
         return "Long-term memory policy"
     return resource_type.replace("_", " ").title()
@@ -275,8 +283,8 @@ def _health(resource_type: str, config: dict[str, Any]) -> str:
     if resource_type == "MODEL":
         return str(config.get("availability") or "UNKNOWN")
     if resource_type == "KNOWLEDGE":
-        return "INDEXED" if config.get("active_index_version") else "UNKNOWN"
-    if resource_type in {"TOOL", "MCP_CONNECTION"}:
+        return "EXTERNAL" if str(config.get("provider") or "LOCAL").upper() != "LOCAL" else ("INDEXED" if config.get("active_index_version") else "UNKNOWN")
+    if resource_type in {"TOOL", "MCP_CONNECTION", "KNOWLEDGE_CONNECTION"}:
         return "CONFIGURED"
     return "READY"
 
@@ -401,7 +409,13 @@ async def _catalog(principal: Principal) -> list[CatalogItem]:
             dependencies.append(UUID(str(version.config["connection_version_id"])))
         if version.config.get("embedding_model_version_id"):
             dependencies.append(UUID(str(version.config["embedding_model_version_id"])))
-        fallback_source = "DIFY" if version.config.get("kind") == "DIFY_FLOW" else "MCP" if version.config.get("kind") == "MCP" else "PLATFORM_NATIVE"
+        fallback_source = (
+            "DIFY" if version.config.get("kind") == "DIFY_FLOW" else
+            "MCP" if version.config.get("kind") == "MCP" else
+            "RAGFLOW" if str(version.config.get("provider") or "").upper() == "RAGFLOW" else
+            "REMOTE_HTTP" if str(version.config.get("provider") or "").upper() == "REMOTE_HTTP" else
+            "PLATFORM_NATIVE"
+        )
         descriptor = _descriptor_values(descriptors, version.resource_type.value, version.resource_id,
                                         fallback_owner=definition.created_by, fallback_source=fallback_source)
         items.append(CatalogItem(
@@ -718,6 +732,39 @@ async def workbench_knowledge_overview(resource_id: UUID, principal: Principal =
         ).order_by(ResourceVersionRow.version_number.desc()))
         if version is None:
             raise ApiError(409, "KNOWLEDGE_VERSION_UNPUBLISHED", "knowledge base has no published version")
+        config = version.config or {}
+        provider = str(config.get("provider") or "LOCAL").upper()
+        provider_display_names = {
+            "LOCAL": "平台文件知识库",
+            "RAGFLOW": "RAGFlow 外部知识库",
+            "REMOTE_HTTP": "远程知识检索服务",
+        }
+        if provider != "LOCAL":
+            connection_display_name = None
+            connection_id = config.get("connection_version_id")
+            if connection_id:
+                try:
+                    connection_version = await session.get(ResourceVersionRow, UUID(str(connection_id)))
+                    if connection_version is not None and connection_version.tenant_id == principal.tenant_id:
+                        connection_definition = await session.get(ResourceDefinitionRow, connection_version.resource_id)
+                        if connection_definition is not None:
+                            connection_display_name = connection_definition.display_name
+                except ValueError:
+                    pass
+            source_summary = "由已绑定的外部连接实时检索；文档和索引仍在外部服务管理。"
+            if provider == "RAGFLOW":
+                source_summary = "由 RAGFlow 数据集实时检索；文档、解析和索引在 RAGFlow 中管理。"
+            return KnowledgeOverview(
+                resource_id=resource_id,
+                resource_version_id=version.resource_version_id,
+                display_name=definition.display_name,
+                description=definition.description,
+                provider=provider,
+                provider_display_name=provider_display_names.get(provider, provider),
+                source_summary=source_summary,
+                connection_display_name=connection_display_name,
+                supported_operations=["RETRIEVAL_TEST", "PERMISSIONS", "USAGE", "CONNECTION_STATUS"],
+            )
         documents = (await session.scalars(select(KnowledgeDocumentRow).where(
             KnowledgeDocumentRow.tenant_id == principal.tenant_id,
             KnowledgeDocumentRow.knowledge_resource_version_id == version.resource_version_id,
@@ -746,6 +793,9 @@ async def workbench_knowledge_overview(resource_id: UUID, principal: Principal =
                 status=document.status, created_at=document.created_at, chunk_count=chunk_count, preview=preview))
         return KnowledgeOverview(resource_id=resource_id, resource_version_id=version.resource_version_id,
             display_name=definition.display_name, description=definition.description,
+            provider=provider, provider_display_name=provider_display_names["LOCAL"],
+            source_summary="文件由平台后端接收并保存到对象存储，索引在平台内构建和激活。",
+            supported_operations=["UPLOAD", "INDEX", "RETRIEVAL_TEST", "PERMISSIONS", "USAGE"],
             active_index_version=active.version_number if active else None,
             active_index_status=active.status if active else None,
             embedding_model=active.embedding_model if active else None,

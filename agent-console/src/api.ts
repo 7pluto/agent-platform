@@ -253,6 +253,8 @@ export interface ResourceDetail {
 }
 export interface KnowledgeOverview {
   resource_id: string; resource_version_id: string; display_name: string; description?: string
+  provider: 'LOCAL' | 'RAGFLOW' | 'REMOTE_HTTP' | string; provider_display_name: string
+  source_summary?: string; connection_display_name?: string; supported_operations: string[]
   active_index_version?: number; active_index_status?: string; embedding_model?: string
   document_count: number; chunk_count: number
   documents: Array<{ document_id: string; filename: string; status: string; created_at?: string; chunk_count: number; preview?: string }>
@@ -407,6 +409,12 @@ export const api = {
     method: 'POST', headers: { 'X-CSRF-Token': csrf }, body: JSON.stringify(payload),
   }),
   createRagflowConnection: (payload: { slug: string; display_name: string; endpoint: string; api_key: string; timeout_seconds: number }, csrf: string) => request<RegistryResourceVersion>('/api/v1/ragflow-connections', {
+    method: 'POST', headers: { 'X-CSRF-Token': csrf }, body: JSON.stringify(payload),
+  }),
+  discoverRagflowDatasets: (resourceVersionId: string, csrf: string) => request<Array<{ id: string; name: string; description?: string }>>(`/api/v1/ragflow-connections/${resourceVersionId}/discover`, {
+    method: 'POST', headers: { 'X-CSRF-Token': csrf },
+  }),
+  registerRagflowKnowledge: (payload: { connection_version_id: string; dataset_id: string; slug: string; display_name: string; description?: string }, csrf: string) => request<RegistryResourceVersion>('/api/v1/ragflow-knowledge/register', {
     method: 'POST', headers: { 'X-CSRF-Token': csrf }, body: JSON.stringify(payload),
   }),
   createHttpTool: (payload: {

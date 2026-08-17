@@ -186,3 +186,11 @@ Stage 4 foundation: resource registry, Agent Assembly V2, worker deployment and 
 - Added `KNOWLEDGE_CONNECTION` for RAGFlow. The connection keeps its endpoint allowlist and one Vault-backed API-key reference; Dataset discovery uses the supported RAGFlow dataset endpoint and never exposes a Dataset ID to an Agent model.
 - An administrator can register one currently discovered Dataset as one immutable `KNOWLEDGE` resource. Runtime resolves that resource through its trusted connection and issues retrieval only against its fixed external Dataset ID.
 - Verification: Python compileall and focused Knowledge Provider/resource/Runtime tests pass (14 passed). No deployment or GitHub push was performed.
+
+# 2026-08-14 V1.5 Provider-aware Knowledge Center (local only)
+
+- Knowledge Center no longer treats every Knowledge resource as a platform-file collection. It explicitly identifies `LOCAL`, `RAGFLOW` and `REMOTE_HTTP`, shows the safe connection/source summary, and only presents upload, ingest and index actions for `LOCAL` knowledge.
+- Retrieval test now uses the same trusted `KnowledgeProvider` contract as the runtime. Local, RAGFlow and remote knowledge tests return normalized safe hits; external knowledge cannot accidentally accept local-document or local-index operations.
+- Runtime connection expansion moved to a provider-context resolver. The runtime no longer contains a RAGFlow-specific connection branch; published Knowledge versions resolve their immutable Knowledge Connection generically before a provider is selected.
+- The add-resource wizard now supports RAGFlow Dataset discovery from a selected published RAGFlow Connection and registers the selected Dataset as a semantic Knowledge resource with the normal descriptor and RuoYi `VIEW`/`USE` publication scope. Dataset identifiers remain in immutable server-side configuration and are not included in model-visible capability text.
+- Verification: Python compileall and focused Knowledge Provider/resource/runtime tests pass (15 passed). Vue production build was not re-run because the local build approval was denied by the client usage limit; no workaround or deployment was attempted.

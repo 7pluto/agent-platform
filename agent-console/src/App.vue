@@ -80,7 +80,7 @@ const resourceForm = ref({
   embeddingModelVersionId: '', ttlDays: 30, maxItems: 50, categories: 'preference',
   modelBaseUrl: 'https://api.siliconflow.cn/v1', modelName: '', modelApiKey: '', modelMode: 'CHAT',
   mcpEndpoint: '', mcpApiKey: '', mcpTimeout: 10,
-  ragflowEndpoint: '', ragflowApiKey: '', ragflowTimeout: 20,
+  ragflowEndpoint: '', ragflowApiKey: '', ragflowTimeout: 20, knowledgeSource: 'LOCAL' as 'LOCAL' | 'RAGFLOW', ragflowConnectionVersionId: '', ragflowDatasetId: '',
   httpEndpoint: '', httpPath: '/', httpMethod: 'GET' as 'GET' | 'POST', httpToolName: '', httpApiKey: '', httpTimeout: 15,
   httpInputSchema: '{"type":"object","properties":{}}', httpQueryTemplate: '{}', httpBodyTemplate: '', httpTestArguments: '{}',
   difyBaseUrl: '', difyApiKey: '', difyFlowType: 'CHATFLOW', difyToolName: '', difyTimeout: 90,
@@ -97,8 +97,10 @@ const knowledgeJobs = ref<IngestJob[]>([])
 const knowledgeFile = ref<File | null>(null)
 const knowledgeUploadOpen = ref(false)
 const knowledgeRetrievalQuery = ref('')
-const knowledgeRetrievalHits = ref<Array<{ document_id: string; chunk_number: number; content: string; score: number }>>([])
+const knowledgeRetrievalHits = ref<Array<{ document_id: string; chunk_number: number; content: string; score: number; title?: string; source?: string }>>([])
 const knowledgeBusy = ref(false)
+const ragflowDatasets = ref<Array<{ id: string; name: string; description?: string }>>([])
+const ragflowDiscovering = ref(false)
 
 const conversations = ref<ConversationRecord[]>([])
 const selectedConversationId = ref('')
@@ -233,6 +235,16 @@ async function openResourceWizard() {
     const [users, departments, roles] = await Promise.all([api.searchIamSubjects('USER'), api.searchIamSubjects('DEPT'), api.searchIamSubjects('ROLE')])
     iamUsers.value = users.items; iamDepartments.value = departments.items; iamRoles.value = roles.items
   } catch { /* Upstream directory may be unavailable; current principal remains a valid owner. */ }
+}
+async function discoverRagflowDatasets() {
+  const connectionVersionId = resourceForm.value.ragflowConnectionVersionId
+  if (!connectionVersionId) { error.value = '请先选择已发布的 RAGFlow 连接。'; return }
+  ragflowDiscovering.value = true; error.value = ''
+  try {
+    ragflowDatasets.value = await api.discoverRagflowDatasets(connectionVersionId, csrf.value)
+    if (!ragflowDatasets.value.length) error.value = '该 RAGFlow 连接没有发现可接入的数据集。'
+  } catch (err) { error.value = err instanceof Error ? err.message : String(err) }
+  finally { ragflowDiscovering.value = false }
 }
 function selectResourceCategory(category: 'CAPABILITY' | 'CONNECTOR' | 'EXTERNAL_APP') {
   resourceCategory.value = category
@@ -521,7 +533,8 @@ async function createTypedResource() {
   const form = resourceForm.value
   const semanticsError = validateResourceSemantics()
   if (semanticsError) { error.value = semanticsError; return }
-  if (form.type === 'KNOWLEDGE' && !form.embeddingModelVersionId) { error.value = '知识库必须选择 Embedding 模型版本。'; return }
+  if (form.type === 'KNOWLEDGE' && form.knowledgeSource === 'LOCAL' && !form.embeddingModelVersionId) { error.value = '平台文件知识库必须选择 Embedding 模型版本。'; return }
+  if (form.type === 'KNOWLEDGE' && form.knowledgeSource === 'RAGFLOW' && (!form.ragflowConnectionVersionId || !form.ragflowDatasetId)) { error.value = '请选择 RAGFlow 连接并发现、选择数据集。'; return }
   resourceSaving.value = true; error.value = ''
   try {
     const slug = (form.slug.trim() || slugify(form.displayName)).toLowerCase()
@@ -546,6 +559,12 @@ async function createTypedResource() {
       form.ragflowApiKey = ''
       await saveNewResourceDescriptor(connection.resource_id, 'RAGFLOW')
       await publishResourceAudience('KNOWLEDGE_CONNECTION', connection.resource_version_id)
+      resourceComposerOpen.value = false; await Promise.all([loadResources(), loadCatalog()]); return
+    }
+    if (form.type === 'KNOWLEDGE' && form.knowledgeSource === 'RAGFLOW') {
+      const knowledge = await api.registerRagflowKnowledge({ connection_version_id: form.ragflowConnectionVersionId, dataset_id: form.ragflowDatasetId, slug, display_name: form.displayName.trim(), description: form.description.trim() || undefined }, csrf.value)
+      await saveNewResourceDescriptor(knowledge.resource_id, 'RAGFLOW')
+      await publishResourceAudience('KNOWLEDGE', knowledge.resource_version_id)
       resourceComposerOpen.value = false; await Promise.all([loadResources(), loadCatalog()]); return
     }
     if (form.type === 'TOOL' && form.toolMode === 'HTTP') {
@@ -614,6 +633,13 @@ async function refreshKnowledgeOperations() {
   if (!selectedKnowledgeVersionId.value) return
   knowledgeBusy.value = true; error.value = ''
   try {
+    const activeKnowledge = selectedKnowledge.value
+    if (!activeKnowledge) return
+    if (activeKnowledge.provider !== 'LOCAL') {
+      knowledgeDocuments.value = []; knowledgeIndexes.value = []; knowledgeJobs.value = []
+      selectedKnowledge.value = await api.workbenchKnowledge(activeKnowledge.resource_id)
+      return
+    }
     const [documents, indexes, jobs] = await Promise.all([
       api.listKnowledgeDocuments(selectedKnowledgeVersionId.value),
       api.listKnowledgeIndexes(selectedKnowledgeVersionId.value),
@@ -1102,11 +1128,19 @@ onMounted(loadSession)
 <label class="wide-field">RAGFlow API Key<input v-model="resourceForm.ragflowApiKey" type="password" autocomplete="new-password" placeholder="仅本次提交，后端保存至 Vault" /></label>
 </template>
 <template v-else-if="resourceForm.type === 'KNOWLEDGE'">
+<label>知识来源<select v-model="resourceForm.knowledgeSource" @change="ragflowDatasets = []; resourceForm.ragflowDatasetId = ''"><option value="LOCAL">平台文件知识库（PDF / DOCX）</option><option value="RAGFLOW">RAGFlow 外部数据集</option></select></label>
+<template v-if="resourceForm.knowledgeSource === 'LOCAL'">
 <label>Embedding 模型版本<select v-model="resourceForm.embeddingModelVersionId">
 <option value="">请选择已发布 Embedding 模型</option>
 <option v-for="item in embeddingModels()" :key="item.version_id" :value="item.version_id">{{ optionLabel(item) }}</option>
 </select>
 </label>
+</template>
+<template v-else>
+<label>RAGFlow 连接<select v-model="resourceForm.ragflowConnectionVersionId" @change="ragflowDatasets = []; resourceForm.ragflowDatasetId = ''"><option value="">请选择已发布连接</option><option v-for="item in catalogFor('KNOWLEDGE_CONNECTION')" :key="item.version_id" :value="item.version_id">{{ optionLabel(item) }}</option></select></label>
+<label class="button-field"><span>数据集发现</span><button class="button ghost" type="button" :disabled="ragflowDiscovering || !resourceForm.ragflowConnectionVersionId" @click="discoverRagflowDatasets">{{ ragflowDiscovering ? '发现中…' : '发现数据集' }}</button></label>
+<label class="wide-field">RAGFlow 数据集<select v-model="resourceForm.ragflowDatasetId" :disabled="!ragflowDatasets.length"><option value="">{{ ragflowDatasets.length ? '请选择数据集' : '请先发现数据集' }}</option><option v-for="item in ragflowDatasets" :key="item.id" :value="item.id">{{ item.name }}{{ item.description ? ` · ${item.description}` : '' }}</option></select><small class="field-hint">数据集标识只保存在不可变资源版本中，不会发送到模型上下文。</small></label>
+</template>
 </template>
 <template v-else-if="resourceForm.type === 'MEMORY_POLICY'">
 <label>TTL（天）<input v-model.number="resourceForm.ttlDays" type="number" min="1" />
@@ -1193,20 +1227,26 @@ onMounted(loadSession)
 <div><p class="eyebrow">{{ selectedKnowledge.active_index_status || '尚无活跃索引' }}</p><h2>{{ selectedKnowledge.display_name }}</h2><p>{{ selectedKnowledge.description || '未填写用途说明' }}</p></div>
 <div class="detail-metrics"><span><b>{{ selectedKnowledge.document_count }}</b>文档</span><span><b>{{ selectedKnowledge.chunk_count }}</b>分块</span><span><b>V{{ selectedKnowledge.active_index_version || '—' }}</b>活跃索引</span></div>
 </article>
+<article v-if="selectedKnowledge.provider !== 'LOCAL'" class="product-card provider-source-card">
+<p class="eyebrow">{{ selectedKnowledge.provider_display_name }}</p>
+<h3>外部知识库</h3>
+<p>{{ selectedKnowledge.source_summary || '该知识库由外部连接提供实时检索。' }}</p>
+<dl class="provider-facts"><div><dt>连接</dt><dd>{{ selectedKnowledge.connection_display_name || '由平台托管' }}</dd></div><div><dt>可执行操作</dt><dd>检索测试、权限管理、使用情况、连接状态</dd></div></dl>
+</article>
 <div class="knowledge-action-grid">
-<article class="product-card"><h3>1. 上传文档</h3><p>仅接受 PDF、DOCX；点击后在弹窗中选择文件，由后端校验并写入 MinIO。</p><button class="button primary" :disabled="knowledgeBusy" @click="knowledgeUploadOpen = true">上传文档</button></article>
-<article class="product-card"><h3>2. 构建索引</h3><p>从已上传文档构建新的不可变 Index Version，成功后原子激活。</p><button class="button primary" :disabled="knowledgeBusy || !knowledgeDocuments.length" @click="buildKnowledgeIndex">开始 Ingest / 构建索引</button></article>
+<article v-if="selectedKnowledge.provider === 'LOCAL'" class="product-card"><h3>1. 上传文档</h3><p>仅接受 PDF、DOCX；点击后在弹窗中选择文件，由后端校验并写入 MinIO。</p><button class="button primary" :disabled="knowledgeBusy" @click="knowledgeUploadOpen = true">上传文档</button></article>
+<article v-if="selectedKnowledge.provider === 'LOCAL'" class="product-card"><h3>2. 构建索引</h3><p>从已上传文档构建新的不可变 Index Version，成功后原子激活。</p><button class="button primary" :disabled="knowledgeBusy || !knowledgeDocuments.length" @click="buildKnowledgeIndex">开始 Ingest / 构建索引</button></article>
 <article class="product-card"><h3>3. 检索测试</h3><p>验证当前活跃索引的召回片段和相似度。</p><textarea v-model="knowledgeRetrievalQuery" rows="3" placeholder="输入要检索的业务问题" /><button class="button primary" :disabled="knowledgeBusy || !knowledgeRetrievalQuery.trim()" @click="runKnowledgeRetrievalTest">执行检索</button></article>
 </div>
-<div v-if="knowledgeUploadOpen" class="modal-backdrop" @click.self="knowledgeUploadOpen = false">
+<div v-if="knowledgeUploadOpen && selectedKnowledge.provider === 'LOCAL'" class="modal-backdrop" @click.self="knowledgeUploadOpen = false">
 <section class="compact-modal" role="dialog" aria-modal="true" aria-label="上传知识文档">
 <header><div><p class="eyebrow">UPLOAD DOCUMENT</p><h2>上传知识文档</h2><p>文件将由服务端校验类型并保存到 MinIO，不会让浏览器直接访问对象存储。</p></div><button class="icon-button" aria-label="关闭" @click="knowledgeUploadOpen = false">×</button></header>
 <div class="compact-modal-body"><label>选择 PDF 或 DOCX<input type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" @change="chooseKnowledgeFile" /></label><p v-if="knowledgeFile" class="field-hint">已选：{{ knowledgeFile.name }}</p><p v-else class="field-hint">单个文件将在登记后显示在当前知识库文档列表中。</p></div>
 <footer><button class="button ghost" :disabled="knowledgeBusy" @click="knowledgeUploadOpen = false">取消</button><button class="button primary" :disabled="knowledgeBusy || !knowledgeFile" @click="uploadKnowledgeFile">{{ knowledgeBusy ? '上传中…' : '上传并登记' }}</button></footer>
 </section>
 </div>
-<article class="product-card knowledge-table"><div class="section-heading"><div><h2>文档</h2><p>查看解析和安全校验状态。</p></div></div><table><thead><tr><th>文件名</th><th>状态</th><th>上传时间</th></tr></thead><tbody><tr v-for="item in knowledgeDocuments" :key="item.document_id"><td>{{ item.filename }}</td><td><span class="status-pill">{{ item.status }}</span></td><td>{{ shortTime(item.created_at) }}</td></tr></tbody></table><p v-if="!knowledgeDocuments.length" class="empty-copy">暂无文档。</p></article>
-<div class="knowledge-bottom-grid">
+<article v-if="selectedKnowledge.provider === 'LOCAL'" class="product-card knowledge-table"><div class="section-heading"><div><h2>文档</h2><p>查看解析和安全校验状态。</p></div></div><table><thead><tr><th>文件名</th><th>状态</th><th>上传时间</th></tr></thead><tbody><tr v-for="item in knowledgeDocuments" :key="item.document_id"><td>{{ item.filename }}</td><td><span class="status-pill">{{ item.status }}</span></td><td>{{ shortTime(item.created_at) }}</td></tr></tbody></table><p v-if="!knowledgeDocuments.length" class="empty-copy">暂无文档。</p></article>
+<div v-if="selectedKnowledge.provider === 'LOCAL'" class="knowledge-bottom-grid">
 <article class="product-card"><h2>Ingest 任务</h2><div v-for="job in knowledgeJobs" :key="job.job_id" class="reference-item"><b>{{ job.status }}</b><small>{{ shortTime(job.created_at) }} · {{ job.error_code || '无错误' }}</small></div><p v-if="!knowledgeJobs.length" class="empty-copy">尚无构建任务。</p></article>
 <article class="product-card"><h2>索引版本</h2><div v-for="index in knowledgeIndexes" :key="index.index_version_id" class="reference-item"><b>Index V{{ index.version_number }}</b><small>{{ index.status }} · {{ index.embedding_model }} · {{ shortTime(index.created_at) }}</small></div><p v-if="!knowledgeIndexes.length" class="empty-copy">尚无索引版本。</p></article>
 </div>

@@ -149,6 +149,36 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.provider-source-card {
+  padding: 18px 20px;
+  border-left: 4px solid #6556e8;
+}
+
+.provider-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin: 16px 0 0;
+}
+
+.provider-facts div {
+  min-width: 0;
+  padding: 12px;
+  border-radius: 10px;
+  background: #f7f7fd;
+}
+
+.provider-facts dt { color: #73778a; font-size: 12px; }
+.provider-facts dd { margin: 5px 0 0; color: #22263a; font-weight: 600; }
+
+.button-field {
+  display: grid;
+  align-content: end;
+  gap: 8px;
+}
+
+.button-field .button { width: fit-content; }
+
 .retrieval-hit {
   margin-top: 12px;
   border-radius: 12px;
@@ -162,6 +192,8 @@
   .knowledge-bottom-grid {
     grid-template-columns: 1fr;
   }
+
+  .provider-facts { grid-template-columns: 1fr; }
 
   .knowledge-sidebar {
     position: static;
