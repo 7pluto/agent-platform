@@ -8,12 +8,45 @@
 
 | 范围 | 执行方式 | 结果 | 证据 |
 |---|---|---|---|
-| 后端全量单元与集成测试 | `py -3.12 -m pytest -q` | 82 passed | pytest 终端结果；仅有 Windows pytest cache 目录权限告警 |
+| 后端全量单元与集成测试 | `py -3 -m pytest -q` | 85 passed | pytest 终端结果；仅有 Windows pytest cache 目录权限告警 |
 | Python 语法与模块编译 | `py -3.12 -m compileall -q app tests migrations` | 通过 | 无编译错误 |
 | Console TypeScript | `npx vue-tsc --noEmit` | 通过 | 无类型错误 |
 | Console 生产构建 | `npm run build` | 通过 | Vite 生成 `dist`，JS/CSS bundle 正常 |
 
-## 2. Discovery Snapshot 与 Drift
+## 2. 权限裁剪业务矩阵
+
+### PERMISSION-001：Deployment RUN 与多来源 Resource USE 分离
+
+测试智能体固定挂载以下能力：Dify A、Dify B、CRM MCP Tool、财务 MCP Tool、受控 HTTP 工单 Tool、本地员工制度 Knowledge、RAGFlow 财务 Knowledge、Remote HTTP 客服 Knowledge。
+
+测试账号只获得 Deployment `VIEW/RUN`，并只获得 Dify A、CRM MCP Tool 及其 Connection、HTTP Tool、本地 Knowledge、Remote HTTP Knowledge 的 `USE`；不授予 Dify B、财务 MCP Connection/Tool、RAGFlow 财务 Knowledge 的 `USE`。
+
+步骤：
+
+1. 用测试账号打开智能体广场，确认智能体可见并可创建会话。
+2. 创建 Run，检查不可变 Manifest 中每项资源的 `use_allowed` 判定。
+3. 检查 `runtime.capabilities.registered` 与实际传给模型的 Tool Registry。
+4. 分别搜索已授权和未授权能力的业务名称、Tool Name、外部应用 ID、Dataset ID。
+
+预期：
+
+- Deployment 可见和可运行不受可选资源未授权影响。
+- 已授权的 Dify、MCP 单工具、HTTP Tool、本地/Remote Knowledge 正常进入 Tool Registry。
+- 未授权的 Dify B、财务 MCP Tool/Connection、RAGFlow Knowledge 不进入 Tool Registry。
+- 模型上下文和 Tool Schema 中找不到受限能力名称、参数、Version ID 或外部 ID。
+- 权限裁剪只影响受限能力，不阻断其他已授权能力和最终回答。
+
+状态：运行时注册表自动化通过。证据：`tests/test_permission_matrix.py::test_runtime_registry_only_contains_use_authorized_business_capabilities`。RuoYi 多账号、角色和部门的真实环境矩阵仍需部署后执行。
+
+### PERMISSION-002：权限变更只影响新 Run
+
+步骤：创建 Run A 后撤销某 Tool 的 `USE`，再创建 Run B。
+
+预期：Run A 的 Manifest 保留创建时授权快照，可用于复盘；Run B 的 Manifest 标记该资源不可用，Tool Registry 不再包含该能力；不改写旧 Agent Version、Revision 或 Run。
+
+状态：待 PostgreSQL + RuoYi 真实环境执行。
+
+## 3. Discovery Snapshot 与 Drift
 
 ### DRIFT-001：Dify 发布快照不保存凭据
 
@@ -121,7 +154,57 @@
 
 状态：待 PostgreSQL 双租户集成测试。
 
-## 3. 最终业务验收矩阵
+## 4. Trace 与 Observation Policy
+
+### TRACE-001：事件脱敏与限长
+
+步骤：让 Tool 返回嵌套的 Authorization、API Key、Access Token、Secret、Cookie，以及超长字符串和超过 100 项的数组。
+
+预期：
+
+- 敏感字段在持久化前统一替换为 `[REDACTED]`。
+- 普通字段保留；`token_count` 等非凭据指标不被误删。
+- Tool/模型 observation、RAG hit 数量、单段内容和 Trace 总 payload 均受固定上限控制。
+- 超限结果明确带 `_truncated` 与原始字符数，不会导致 Run 或页面崩溃。
+- Manifest 记录 `observation=standard@1`，旧 Run 仍可按原 Manifest 复盘。
+
+状态：自动化通过。证据：`tests/test_observation_policy.py`、`tests/test_worker.py`。
+
+### TRACE-002：聊天页中文 Timeline
+
+步骤：执行包含 Memory、Skill、MCP/HTTP Tool、Knowledge 检索的 Run。
+
+预期：执行时 Trace 自动展开；完成或失败后自动收起；标题展示耗时、工具次数、知识命中数和 Memory 数；事件默认显示中文业务摘要；原始脱敏 JSON 仅在“查看原始事件”后出现；最终回答始终位于 Trace 下方。
+
+状态：前端类型检查和生产构建通过；真实组合 Run 的浏览器验收待部署后执行。
+
+## 5. 前端产品化验收
+
+### UI-001：唯一 Agent Builder
+
+步骤：进入任意 Deployment 配置页，依次选择模型与身份、技能与工具、知识与记忆。
+
+预期：只有一套三栏式 Builder；支持名称/用途搜索、Provider 和风险筛选、卡片添加/移除及快速详情；能力选择器不存在 `<select multiple>` 或高级 JSON；右侧持续显示当前组装和预检阻断项；MCP Connection 不作为新配置的直接能力出现。
+
+状态：源码结构检查、Vue 类型检查和生产构建通过；浏览器交互验收待部署后执行。
+
+### UI-002：能力、连接与知识分区
+
+步骤：分别访问 `/console/capabilities`、`/console/connections`、`/console/knowledge`。
+
+预期：能力中心只展示 Model、Prompt、Skill、Tool、Memory Policy；系统连接只展示 MCP/RAGFlow Connection；知识库运营只展示 Knowledge。卡片主标题为业务名称，UUID、hash、raw config 不作为默认内容。
+
+状态：Vue 类型检查与生产构建通过。
+
+### UI-003：独立资源详情
+
+步骤：从能力或连接卡片进入详情并刷新页面。
+
+预期：详情拥有稳定 URL；以“概览、版本与依赖、权限与引用、技术摘要”分区；默认不平铺原始配置；返回列表和浏览器前进后退正常。
+
+状态：路由、类型检查与生产构建通过；浏览器刷新验收待部署后执行。
+
+## 6. 最终业务验收矩阵
 
 ### VALIDATE-001：外部 Knowledge 不要求本地索引
 
@@ -174,11 +257,11 @@
 | BIZ-005 | RAGFlow 连接→发现 3 个 Dataset→分别发布 Knowledge | 一个 Dataset 一个 Resource、分别授权、模型不可见 Dataset ID | 待真实 RAGFlow 环境 |
 | BIZ-006 | Remote HTTP Knowledge→Mapping→检索→Agent 使用 | 仅暴露 query/top_k、固定 knowledge ID、响应规范化 | 待全链验收 |
 | BIZ-007 | Agent 组装与发布 | Model/Prompt/Skill/Tool/Knowledge/Memory、发布校验、Revision 回滚 | 待 Iteration O/P |
-| BIZ-008 | RuoYi 权限矩阵 | Deployment VIEW/RUN 与 Resource USE 分离，用户/角色/部门生效 | 待 Iteration Q 全矩阵 |
-| BIZ-009 | Run Trace | 可读 Timeline、权限裁剪、工具/RAG/Memory 实际调用、原始事件可展开 | 待 Iteration R |
+| BIZ-008 | RuoYi 权限矩阵 | Deployment VIEW/RUN 与 Resource USE 分离，用户/角色/部门生效 | 运行时矩阵自动化通过；待真实账号矩阵 |
+| BIZ-009 | Run Trace | 可读 Timeline、权限裁剪、工具/RAG/Memory 实际调用、原始事件可展开 | 策略与前端构建通过；待真实组合 Run |
 | BIZ-010 | 生命周期与影响分析 | 使用中禁止物理删除、归档/弃用、Health/Drift/Impact | 待 Iteration S |
 
-## 4. 安全与中文显示通用断言
+## 7. 安全与中文显示通用断言
 
 - 所有 API、Trace、审计、日志和前端状态不得返回 API Key、Vault 密文、Authorization、Cookie 或用户上传原文。
 - 所有租户资源、快照、Grant、Run、Memory、文档与索引必须同时经过应用鉴权和 PostgreSQL RLS。

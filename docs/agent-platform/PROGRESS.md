@@ -4,6 +4,16 @@
 
 Stage 4 foundation: resource registry, Agent Assembly V2, worker deployment and capability primitives.
 
+## 2026-08-24 — V1.5 Capability UX, permission matrix and readable Trace (local only)
+
+- Replaced the duplicate five-step/select-multiple/advanced-JSON Agent configuration with one three-column card-based Builder: module navigation, capability search/provider/risk filters, quick preview, selected summary and publish preflight.
+- Split administrator navigation into Capability Center, System Connections and Knowledge Operations. MCP/RAGFlow Connections no longer appear as Agent-assemblable capability cards.
+- Resource Detail is now a stable full-page route with Overview, Versions/Dependencies, Governance/References and Technical Summary tabs. Raw safe configuration is not the default view; Builder preview remains lightweight.
+- Added `ObservationPolicy standard@1`. Worker events and model observations share recursive credential redaction, bounded strings/lists/RAG hits and maximum payload size. The policy version is frozen into new Run Manifests.
+- Chat Run Trace now renders a Chinese business timeline with duration, actual Tool calls, RAG hits and Memory count. Raw sanitized event JSON is opt-in and the final answer remains below Trace.
+- Added a fixed cross-provider permission matrix proving that denied Dify, MCP Tool/Connection and RAGFlow Knowledge names, schemas, Version IDs and external IDs never enter the model Tool Registry, while authorized Dify, MCP, HTTP and local/remote Knowledge remain available.
+- Verification: backend full suite `85 passed`; Console `vue-tsc --noEmit` and production Vite build pass; frontend source scan found no replacement-character or common mojibake patterns. No deployment or GitHub push was performed for this batch.
+
 ## Completed
 
 - Model version registry, secret references and connection gating.

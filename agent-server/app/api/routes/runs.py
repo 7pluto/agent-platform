@@ -129,7 +129,7 @@ async def create_run(
                 **({"system_prompt": str(prompt_resource.config.get("template", ""))} if configured_model and prompt_resource else {}),
                 **({"model_version_id": str(configured_model.model_version_id), "model_version_content_hash": configured_model.content_hash, "model_config": json_module.dumps(configured_model.config, sort_keys=True)} if configured_model else {}),
             },
-            policy_versions={"builder": "react@1"},
+            policy_versions={"builder": "react@1", "observation": "standard@1"},
             secret_refs={**({"model": configured_model.config["secret_ref"]} if configured_model else {}), **assembled_secret_refs},
             resources=(
                 ([

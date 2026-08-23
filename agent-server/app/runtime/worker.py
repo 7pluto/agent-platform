@@ -7,6 +7,7 @@ from typing import Any
 from app.config import get_settings
 from app.runtime.adapter import RuntimeCancelled, RuntimeExecutor
 from app.runtime.models import RunRecord, RunStatus
+from app.runtime.observation import observation_policy
 from app.runtime.store_factory import get_run_store
 from app.conversation.models import MessageCreate, MessageRole
 from app.conversation.store_factory import get_conversation_store
@@ -47,7 +48,7 @@ class InProcessRuntimeWorker:
             await self._store.append_runtime_event(
                 run.run_id,
                 event,
-                data,
+                observation_policy.sanitize_event(event, data),
                 run.tenant_id,
                 run.user_id,
             )

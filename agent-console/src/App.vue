@@ -13,7 +13,7 @@ import DiscoveryDriftPanel from './components/DiscoveryDriftPanel.vue'
 
 type Space = 'workspace' | 'console'
 type WorkspaceView = 'agents' | 'chat'
-type ConsoleView = 'overview' | 'agents' | 'resources' | 'knowledge' | 'runs' | 'permissions'
+type ConsoleView = 'overview' | 'agents' | 'resources' | 'connections' | 'knowledge' | 'runs' | 'permissions'
 type ResourceType = 'ALL' | 'MODEL' | 'PROMPT' | 'SKILL' | 'TOOL' | 'MCP_CONNECTION' | 'KNOWLEDGE_CONNECTION' | 'KNOWLEDGE' | 'MEMORY_POLICY'
 
 const router = useRouter()
@@ -41,6 +41,7 @@ const observability = ref<RunObservabilitySummary | null>(null)
 const selectedAgent = ref<AgentWorkbenchItem | null>(null)
 const selectedResource = ref<ResourceDetail | null>(null)
 const selectedKnowledge = ref<KnowledgeOverview | null>(null)
+const resourceDetailTab = ref<'OVERVIEW' | 'VERSIONS' | 'GOVERNANCE' | 'TECHNICAL'>('OVERVIEW')
 const descriptorEditing = ref(false)
 const descriptorForm = ref({ owner_user_id: '', owner_dept_id: '', source_type: 'PLATFORM_NATIVE', source_ref: '', usage_guidance: '', one_line_summary: '', when_to_use: '', when_not_to_use: '', input_summary: '', output_summary: '', risk_level: 'LOW', read_only: true, tags: '', lifecycle_status: 'ACTIVE' })
 const resourceQuery = ref('')
@@ -56,13 +57,10 @@ const agentCreateForm = ref({ displayName: '', description: '', deploymentName: 
 const agentDetail = ref<DeploymentCapabilities | null>(null)
 const draft = ref<ConfigurationDraft | null>(null)
 const validation = ref<ConfigurationValidation | null>(null)
-const builderStep = ref(1)
 const builderSaving = ref(false)
 const builderPublishing = ref(false)
 const agentPublicationScope = ref<'PERSONAL' | 'OWNER_DEPT' | 'SELECTED_SUBJECTS'>('PERSONAL')
 const agentPublicationSubjects = ref<string[]>([])
-const showAdvancedJson = ref(false)
-const draftJson = ref('{}')
 const resourceComposerOpen = ref(false)
 const resourceSaving = ref(false)
 const moduleWorkbenchOpen = ref(true)
@@ -126,26 +124,6 @@ const capabilityGroups = computed(() => {
     (grouped[item.resource_type] ||= []).push(item)
   return grouped
 })
-const draftCapabilityGroups = computed(() => {
-  const selected = new Set<string>()
-  const spec = selectedSpec.value
-  for (const key of ['model_version_id', 'prompt_version_id', 'memory_policy_version_id']) {
-    if (spec[key]) selected.add(String(spec[key]))
-  }
-  for (const key of ['skill_version_ids', 'tool_version_ids', 'mcp_connection_version_ids', 'knowledge_version_ids']) {
-    for (const id of (spec[key] as string[] || [])) selected.add(String(id))
-  }
-  const grouped: Record<string, CatalogItem[]> = {}
-  for (const item of catalog.value.filter(item => selected.has(item.version_id)))
-    (grouped[item.resource_type] ||= []).push(item)
-  return grouped
-})
-const selectedSkillDependencies = computed(() => {
-  const selected = new Set(selectedValues('skill_version_ids'))
-  const direct = new Set(selectedValues('tool_version_ids').concat(selectedValues('knowledge_version_ids')))
-  return catalog.value.filter(item => item.dependencies.length && selected.has(item.version_id)).flatMap(skill =>
-    skill.dependencies.map(id => ({ skill: skill.display_name, item: catalog.value.find(candidate => candidate.version_id === id), direct: direct.has(id) })))
-})
 
 function typeLabel(type: string) {
   return ({ MODEL: '模型', PROMPT: '提示词', SKILL: '技能', TOOL: '工具', MCP_CONNECTION: 'MCP 连接', KNOWLEDGE: '知识库', MEMORY_POLICY: '记忆策略' } as Record<string, string>)[type] || type
@@ -154,9 +132,44 @@ function statusLabel(status?: string) {
   return ({ PUBLISHED: '已发布', DRAFT: '草稿', ACTIVE: '运行中', AVAILABLE: '可用', UNAVAILABLE: '不可用' } as Record<string, string>)[status || ''] || status || '—'
 }
 function shortTime(value?: string) { return value ? new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '暂无' }
+function traceEventLabel(event: string) {
+  return ({
+    'run.created': 'Run 已创建', 'manifest.created': '执行清单已冻结', 'run.claimed': 'Worker 已领取任务', 'run.started': '开始执行',
+    'runtime.started': '运行时已启动', 'manifest.resources.resolved': '能力版本已解析', 'runtime.capabilities.registered': '权限裁剪完成',
+    'conversation.history.loaded': '会话历史已加载', 'memory.read': '长期记忆已加载', 'skills.loaded': '业务技能已加载',
+    'tool.started': '调用业务能力', 'tool.completed': '业务能力返回', 'tool.denied': '能力调用被权限拒绝', 'tool.arguments.invalid': '工具参数自动纠正',
+    'rag.retrieved': '知识检索完成', 'dify.flow.completed': 'Dify Flow 执行完成', 'dify.rag.retrieved': 'Dify 知识检索完成',
+    'runtime.step': '模型推理步骤完成', 'runtime.output': '最终回答已生成', 'runtime.completed': '运行时执行完成',
+    'runtime.failed': '运行时执行失败', 'run.completed': 'Run 已完成', 'run.failed': 'Run 已失败', 'run.cancelled': 'Run 已取消',
+  } as Record<string, string>)[event] || event
+}
+function traceEventSummary(event: RunEvent) {
+  const data = event.data as Record<string, unknown>
+  if (event.event === 'runtime.capabilities.registered') return `${data.tool_count || 0} 项能力可用，${data.filtered_capability_count || 0} 项因权限被过滤`
+  if (event.event === 'conversation.history.loaded') return `${data.count || 0} 条历史消息${data.trimmed ? '，已按上下文上限裁剪' : ''}`
+  if (event.event === 'memory.read') return `${data.count || 0} 条长期记忆`
+  if (event.event === 'skills.loaded') return `${data.count || 0} 个 Skill`
+  if (event.event === 'tool.started') return `正在调用 ${String(data.tool || '工具')}`
+  if (event.event === 'tool.completed') return `${String(data.tool || '工具')} 已返回结果`
+  if (event.event === 'tool.denied') return String(data.message || '当前账号没有使用该能力的权限')
+  if (event.event === 'rag.retrieved') return `${String(data.provider || 'Knowledge')} 返回 ${data.chunk_count || 0} 条知识片段`
+  if (event.event === 'dify.flow.completed') return `${String(data.tool || 'Dify')} 已完成，关联 ${data.retriever_resource_count || 0} 条检索内容`
+  if (event.event === 'runtime.failed') return `${String(data.code || 'RUNTIME_EXECUTION_FAILED')} · ${String(data.error_type || '运行异常')}`
+  if (event.event === 'manifest.resources.resolved') return `${Array.isArray(data.resources) ? data.resources.length : 0} 个不可变资源版本`
+  return shortTime(event.occurred_at)
+}
+const traceToolCalls = computed(() => runEvents.value.filter(item => item.event === 'tool.started').length)
+const traceRagHits = computed(() => runEvents.value.filter(item => item.event === 'rag.retrieved').reduce((count, item) => count + Number(item.data.chunk_count || 0), 0))
+const traceMemoryCount = computed(() => Number(runEvents.value.find(item => item.event === 'memory.read')?.data.count || 0))
+const traceDuration = computed(() => {
+  if (runEvents.value.length < 2) return '—'
+  const start = new Date(runEvents.value[0].occurred_at).getTime()
+  const end = new Date(runEvents.value[runEvents.value.length - 1].occurred_at).getTime()
+  return Number.isFinite(start) && Number.isFinite(end) ? `${Math.max(0, end - start)}ms` : '—'
+})
 function requestId() { return crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}` }
 function consoleTitle(view: ConsoleView) {
-  return ({ overview: '概览', agents: '智能体管理', resources: '资源中心', knowledge: '知识库运营', runs: '运行治理', permissions: '权限与审计' } as Record<ConsoleView, string>)[view]
+  return ({ overview: '概览', agents: '智能体管理', resources: '能力中心', connections: '系统连接', knowledge: '知识库运营', runs: '运行治理', permissions: '权限与审计' } as Record<ConsoleView, string>)[view]
 }
 function goWorkspaceAgents() { void router.push('/workspace/agents') }
 function goConsole(view: ConsoleView) { void router.push(consolePaths[view]) }
@@ -176,7 +189,7 @@ async function applyRouteState() {
     'console-overview': 'overview', 'console-agents': 'agents', 'console-agent-edit': 'agents',
     'console-capabilities': 'resources', 'console-capability-detail': 'resources',
     'console-knowledge': 'knowledge', 'console-knowledge-detail': 'knowledge',
-    'console-connections': 'resources', 'console-connection-detail': 'resources',
+    'console-connections': 'connections', 'console-connection-detail': 'connections',
     'console-runs': 'runs', 'console-run-detail': 'runs', 'console-governance': 'permissions',
   } as Record<string, ConsoleView>)[name]
   if (view) consoleView.value = view
@@ -236,6 +249,12 @@ async function openResourceWizard() {
     const [users, departments, roles] = await Promise.all([api.searchIamSubjects('USER'), api.searchIamSubjects('DEPT'), api.searchIamSubjects('ROLE')])
     iamUsers.value = users.items; iamDepartments.value = departments.items; iamRoles.value = roles.items
   } catch { /* Upstream directory may be unavailable; current principal remains a valid owner. */ }
+}
+async function openConnectionWizard() {
+  consoleView.value = 'resources'
+  await router.push(consolePaths.resources)
+  await openResourceWizard()
+  selectResourceCategory('CONNECTOR')
 }
 async function discoverRagflowDatasets() {
   const connectionVersionId = resourceForm.value.ragflowConnectionVersionId
@@ -365,19 +384,24 @@ async function loadResources() {
   if (!isAdmin.value) return
   resourceLoading.value = true
   try {
-    const data = await api.workbenchResources(resourceQuery.value, resourceType.value === 'ALL' ? '' : resourceType.value)
+    const data = await api.workbenchResources(resourceQuery.value, '')
     resources.value = data.items
   } finally { resourceLoading.value = false }
 }
 async function openResource(item: ResourceListItem, updateRoute = true) {
   selectedKnowledge.value = null
   selectedResource.value = await api.workbenchResource(item.resource_id)
+  resourceDetailTab.value = 'OVERVIEW'
   populateDescriptorForm()
-  if (updateRoute) void router.push(`/console/capabilities/${item.resource_id}`)
+  if (updateRoute) {
+    const connection = item.resource_type === 'MCP_CONNECTION' || item.resource_type === 'KNOWLEDGE_CONNECTION'
+    void router.push(connection ? `/console/connections/${item.resource_id}` : `/console/capabilities/${item.resource_id}`)
+  }
 }
 async function openKnowledge(item: ResourceListItem, updateRoute = true) {
   selectedResource.value = await api.workbenchResource(item.resource_id)
   selectedKnowledge.value = await api.workbenchKnowledge(item.resource_id)
+  resourceDetailTab.value = 'OVERVIEW'
   populateDescriptorForm()
   if (updateRoute) void router.push(`/console/knowledge/${item.resource_id}`)
 }
@@ -412,7 +436,7 @@ async function deleteResource() {
   if (!selectedResource.value || !confirm(`确认删除资源“${selectedResource.value.resource.display_name}”？此操作仅允许删除未被引用、且没有知识文档的资源。`)) return
   try {
     await api.deleteWorkbenchResource(selectedResource.value.resource.resource_id, csrf.value)
-    selectedResource.value = null; selectedKnowledge.value = null
+    closeDetail()
     await Promise.all([loadResources(), loadCatalog(), loadAgents()])
   } catch (err) { error.value = err instanceof Error ? err.message : String(err) }
 }
@@ -454,12 +478,11 @@ async function openAgent(item: AgentWorkbenchItem, configure = false) {
   if (configure && isAdmin.value) {
     await loadIamDirectory()
     draft.value = await api.configurationDraft(item.deployment_id)
-    draftJson.value = JSON.stringify(draft.value.specification, null, 2)
     agentPublicationScope.value = agentDetail.value.publication_scope || 'PERSONAL'
     agentPublicationSubjects.value = (agentDetail.value.publication_subjects || [])
       .filter(subject => !(subject.subject_type === 'USER' && subject.subject_id === principal.value?.external_user_id))
       .map(subject => difySubjectValue(subject.subject_type, subject.subject_id))
-    validation.value = null; builderStep.value = 1
+    validation.value = null
     space.value = 'console'; consoleView.value = 'agents'
     void router.push(`/console/agents/${item.deployment_id}/edit`)
   } else {
@@ -468,18 +491,17 @@ async function openAgent(item: AgentWorkbenchItem, configure = false) {
     await openConversation(item.deployment_id)
   }
 }
-function closeDetail() { selectedResource.value = null; if (space.value === 'workspace') selectedAgent.value = null }
+function closeDetail() {
+  const wasKnowledge = selectedResource.value?.resource.resource_type === 'KNOWLEDGE'
+  const wasConnection = ['MCP_CONNECTION', 'KNOWLEDGE_CONNECTION'].includes(selectedResource.value?.resource.resource_type || '')
+  selectedResource.value = null; selectedKnowledge.value = null
+  if (space.value === 'workspace') selectedAgent.value = null
+  else void router.push(wasKnowledge ? consolePaths.knowledge : wasConnection ? consolePaths.connections : consolePaths.resources)
+}
 
 function setSingle(field: string, value: string) {
   if (!draft.value) return
   draft.value.specification = { ...draft.value.specification, [field]: value || undefined }
-  draftJson.value = JSON.stringify(draft.value.specification, null, 2)
-}
-function setMany(field: string, event: Event) {
-  if (!draft.value) return
-  const values = Array.from((event.target as HTMLSelectElement).selectedOptions).map(option => option.value)
-  draft.value.specification = { ...draft.value.specification, [field]: values }
-  draftJson.value = JSON.stringify(draft.value.specification, null, 2)
 }
 function toggleDraftCapability(field: string, versionId: string) { toggleMany(field, versionId) }
 function toggleMany(field: string, versionId: string) {
@@ -488,12 +510,7 @@ function toggleMany(field: string, versionId: string) {
   if (values.has(versionId)) values.delete(versionId)
   else values.add(versionId)
   draft.value.specification = { ...draft.value.specification, [field]: [...values] }
-  draftJson.value = JSON.stringify(draft.value.specification, null, 2)
 }
-function isSelected(field: string, versionId: string) {
-  return field.endsWith('_ids') ? selectedValues(field).includes(versionId) : selectedValue(field) === versionId
-}
-function selectedValue(field: string) { return String(selectedSpec.value[field] || '') }
 function selectedValues(field: string) { return (selectedSpec.value[field] as string[] || []) }
 function catalogFor(type: string) { return catalog.value.filter(item => item.resource_type === type) }
 function embeddingModels() { return catalogFor('MODEL').filter(item => /embedding|bge|embed/i.test(`${item.summary} ${item.display_name}`)) }
@@ -620,6 +637,11 @@ async function createTypedResource() {
   finally { resourceSaving.value = false }
 }
 
+const capabilityResources = computed(() => resources.value.filter(item =>
+  ['MODEL', 'PROMPT', 'SKILL', 'TOOL', 'MEMORY_POLICY'].includes(item.resource_type)
+  && (resourceType.value === 'ALL' || item.resource_type === resourceType.value)))
+const connectionResources = computed(() => resources.value.filter(item =>
+  ['MCP_CONNECTION', 'KNOWLEDGE_CONNECTION'].includes(item.resource_type)))
 const knowledgeResources = computed(() => resources.value.filter(item =>
   item.resource_type === 'KNOWLEDGE'
   && (!knowledgeQuery.value || `${item.display_name} ${item.description || ''} ${item.slug}`.toLowerCase().includes(knowledgeQuery.value.toLowerCase()))))
@@ -683,13 +705,6 @@ async function runKnowledgeRetrievalTest() {
   catch (err) { error.value = err instanceof Error ? err.message : String(err) }
   finally { knowledgeBusy.value = false }
 }
-function applyAdvancedJson() {
-  try {
-    if (!draft.value) return
-    draft.value.specification = JSON.parse(draftJson.value)
-    error.value = ''
-  } catch { error.value = '高级 JSON 格式不正确，请修正后再应用。' }
-}
 async function saveDraft() {
   if (!selectedAgent.value || !draft.value) return
   builderSaving.value = true; error.value = ''
@@ -697,7 +712,6 @@ async function saveDraft() {
     draft.value = await api.saveConfigurationDraft(selectedAgent.value.deployment_id, {
       specification: draft.value.specification, base_revision_id: draft.value.base_revision_id, lock_version: draft.value.lock_version,
     }, csrf.value)
-    draftJson.value = JSON.stringify(draft.value.specification, null, 2)
   } catch (err) { error.value = err instanceof Error ? err.message : String(err) }
   finally { builderSaving.value = false }
 }
@@ -705,7 +719,6 @@ async function preflight() {
   if (!selectedAgent.value || !draft.value) return
   await saveDraft()
   validation.value = await api.validateConfigurationDraft(selectedAgent.value.deployment_id, { specification: draft.value.specification, base_revision_id: draft.value.base_revision_id }, csrf.value)
-  builderStep.value = 5
 }
 async function publishDraft() {
   if (!selectedAgent.value || !draft.value || !validation.value?.valid) return
@@ -835,7 +848,8 @@ onMounted(loadSession)
 <p>管理</p>
 <button :class="{ active: consoleView === 'overview' }" @click="goConsole('overview')">概览</button>
 <button :class="{ active: consoleView === 'agents' }" @click="goConsole('agents')">智能体管理</button>
-<button :class="{ active: consoleView === 'resources' }" @click="goConsole('resources')">资源中心</button>
+<button :class="{ active: consoleView === 'resources' }" @click="goConsole('resources')">能力中心</button>
+<button :class="{ active: consoleView === 'connections' }" @click="goConsole('connections')">系统连接</button>
 <button :class="{ active: consoleView === 'knowledge' }" @click="goConsole('knowledge')">知识库运营</button>
 <p>治理</p>
 <button :class="{ active: consoleView === 'runs' }" @click="goConsole('runs')">运行治理</button>
@@ -935,14 +949,15 @@ onMounted(loadSession)
 <div class="message-list">
 <p v-if="!messages.length" class="empty-copy">开始提问，当前会话的历史上下文会自动保留。</p>
 <div v-for="item in messages" :key="item.message_id" :class="['message', item.role.toLowerCase()]">{{ item.content }}</div>
-<details v-if="runEvents.length" class="trace-panel" :open="traceExpanded">
+<details v-if="runEvents.length" class="trace-panel" :open="traceExpanded" @toggle="traceExpanded = ($event.target as HTMLDetailsElement).open">
 <summary>
 <span>运行过程</span>
-<small>{{ loading ? '执行中' : '已完成' }} · {{ runEvents.length }} 个事件</small>
+<small>{{ loading ? '执行中' : runEvents.some(item => item.event === 'runtime.failed' || item.event === 'run.failed') ? '运行失败' : '已完成' }} · {{ traceDuration }} · {{ traceToolCalls }} 次工具 · {{ traceRagHits }} 条知识 · {{ traceMemoryCount }} 条记忆</small>
 </summary>
-<article v-for="event in runEvents" :key="event.sequence">
-<b>{{ event.event }}</b>
-<p>{{ JSON.stringify(event.data) }}</p>
+<article v-for="event in runEvents" :key="event.sequence" class="trace-event">
+<span class="trace-dot" />
+<div><b>{{ traceEventLabel(event.event) }}</b><p>{{ traceEventSummary(event) }}</p>
+<details class="trace-raw"><summary>查看原始事件</summary><pre>{{ JSON.stringify(event.data, null, 2) }}</pre></details></div>
 </article>
 </details>
 <div v-if="reply" class="answer">
@@ -1020,9 +1035,9 @@ onMounted(loadSession)
       <section v-else-if="space === 'console' && consoleView === 'resources'" class="page-content">
 <div class="page-heading">
 <div>
-<p class="eyebrow">RESOURCE CENTER</p>
-<h1>资源中心</h1>
-<p>从名称、来源、负责人、版本与引用关系管理企业 AI 能力。</p>
+<p class="eyebrow">CAPABILITY CENTER</p>
+<h1>能力中心</h1>
+<p>管理可组装进智能体的模型、提示词、技能、工具与记忆策略；连接和知识库分别治理。</p>
 </div>
 <button class="button primary" @click="openResourceWizard">＋ 入驻新资源</button>
 </div>
@@ -1180,14 +1195,11 @@ onMounted(loadSession)
 <option value="PROMPT">提示词</option>
 <option value="SKILL">技能</option>
 <option value="TOOL">工具 / Dify</option>
-<option value="MCP_CONNECTION">MCP 连接</option>
-<option value="KNOWLEDGE_CONNECTION">RAGFlow 连接</option>
-<option value="KNOWLEDGE">知识库</option>
 <option value="MEMORY_POLICY">记忆策略</option>
 </select>
 </div>
 <div class="resource-card-grid">
-<button v-for="item in resources" :key="item.resource_id" class="resource-card product-card" @click="item.resource_type === 'KNOWLEDGE' ? openKnowledge(item) : openResource(item)">
+<button v-for="item in capabilityResources" :key="item.resource_id" class="resource-card product-card" @click="openResource(item)">
 <div class="resource-card-top">
 <span class="type-badge">{{ typeLabel(item.resource_type) }}</span>
 <span :class="['status-pill', item.lifecycle_status === 'ARCHIVED' ? 'blocked' : 'success']">{{ item.lifecycle_status === 'ARCHIVED' ? '已归档' : '可用' }}</span>
@@ -1205,7 +1217,27 @@ onMounted(loadSession)
 </footer>
 </button>
 <p v-if="resourceLoading" class="empty-copy">加载中…</p>
-<p v-else-if="!resources.length" class="empty-copy">暂无符合条件的资源。</p>
+<p v-else-if="!capabilityResources.length" class="empty-copy">暂无符合条件的能力。</p>
+</div>
+</section>
+
+      <section v-else-if="space === 'console' && consoleView === 'connections'" class="page-content">
+<div class="page-heading">
+<div><p class="eyebrow">SYSTEM CONNECTIONS</p><h1>系统连接</h1><p>集中管理 MCP 与 RAGFlow 基础连接。连接本身不直接组装进智能体，发现后的工具或知识库才进入能力目录。</p></div>
+<button class="button primary" @click="openConnectionWizard">＋ 新增连接</button>
+</div>
+<div class="connection-summary-grid">
+<article class="product-card"><span>MCP</span><strong>{{ connectionResources.filter(item => item.resource_type === 'MCP_CONNECTION').length }}</strong><small>发现业务工具并独立授权</small></article>
+<article class="product-card"><span>RAGFlow</span><strong>{{ connectionResources.filter(item => item.resource_type === 'KNOWLEDGE_CONNECTION').length }}</strong><small>发现数据集并注册知识库</small></article>
+</div>
+<div class="resource-card-grid">
+<button v-for="item in connectionResources" :key="item.resource_id" class="resource-card product-card" @click="openResource(item)">
+<div class="resource-card-top"><span class="type-badge">{{ item.resource_type === 'MCP_CONNECTION' ? 'MCP 连接' : 'RAGFlow 连接' }}</span><span :class="['status-pill', item.lifecycle_status === 'ARCHIVED' ? 'blocked' : 'success']">{{ item.lifecycle_status === 'ARCHIVED' ? '已归档' : '已发布' }}</span></div>
+<h3>{{ item.display_name }}</h3><p>{{ item.description || '尚未填写业务说明' }}</p>
+<div class="tag-list compact"><span>{{ item.source_type }}</span><span>V{{ item.latest_version_number || '—' }}</span><span>{{ item.referenced_by_count }} 个引用</span></div>
+<footer><small>负责人：{{ item.owner_user_id || '历史导入' }}</small><small>{{ shortTime(item.updated_at) }}</small></footer>
+</button>
+<p v-if="resourceLoading" class="empty-copy">加载中…</p><p v-else-if="!connectionResources.length" class="empty-copy">尚未登记系统连接。</p>
 </div>
 </section>
 
@@ -1330,7 +1362,6 @@ onMounted(loadSession)
 </div>
 <div>
 <button class="button ghost" :disabled="builderSaving" @click="saveDraft">{{ builderSaving ? '保存中…' : '保存草稿' }}</button>
-<button class="button primary" @click="preflight">预检并发布</button>
 </div>
 </header>
 <section class="agent-publication-policy">
@@ -1340,125 +1371,6 @@ onMounted(loadSession)
 <label v-else-if="agentPublicationScope === 'SELECTED_SUBJECTS'">指定范围<select multiple v-model="agentPublicationSubjects"><option v-for="item in difyPublicationOptions()" :key="item.value" :value="item.value">{{ item.label }}</option></select></label>
 </section>
 <AgentModuleBoard :catalog="catalog" :specification="draft.specification" :validation="validation" :publishing="builderPublishing" @single="setSingle" @many="toggleDraftCapability" @preflight="preflight" @publish="publishDraft" />
-<div class="stepper">
-<button v-for="item in [{n:1,t:'基础信息'},{n:2,t:'模型与提示词'},{n:3,t:'技能与工具'},{n:4,t:'知识与记忆'},{n:5,t:'预检发布'}]" :key="item.n" :class="{ active: builderStep === item.n, done: builderStep > item.n }" @click="builderStep = item.n">
-<span>{{ item.n }}</span>{{ item.t }}</button>
-</div>
-<div class="builder-layout">
-<section class="builder-form">
-<template v-if="builderStep === 1">
-<h3>当前配置说明</h3>
-<p>Agent 名称和 Deployment 元数据保持稳定；本次调整只会创建新的 Agent Version 与 Revision。</p>
-<div class="info-box">
-<b>当前部署</b>
-<span>{{ selectedAgent.deployment_name }}</span>
-<b>基础 Revision</b>
-<span>{{ draft.base_revision_id?.slice(0, 8) }}</span>
-<b>草稿状态</b>
-<span>版本 {{ draft.lock_version }} · {{ shortTime(draft.updated_at) }}</span>
-</div>
-<div class="info-box publication-box">
-<b>发布运行范围</b>
-<select v-model="agentPublicationScope">
-<option value="PERSONAL">仅发布人（个人试用）</option>
-<option value="OWNER_DEPT">指定一个部门</option>
-<option value="SELECTED_SUBJECTS">指定部门、角色或用户</option>
-</select>
-<template v-if="agentPublicationScope === 'OWNER_DEPT'">
-<b>可运行部门</b>
-<select v-model="agentPublicationSubjects">
-<option value="">请选择 RuoYi 部门</option>
-<option v-for="item in iamDepartments" :key="item.external_id" :value="difySubjectValue('DEPT', item.external_id)">{{ item.display_name }}</option>
-</select>
-</template>
-<template v-else-if="agentPublicationScope === 'SELECTED_SUBJECTS'">
-<b>可运行范围</b>
-<select multiple v-model="agentPublicationSubjects">
-<option v-for="item in difyPublicationOptions()" :key="item.value" :value="item.value">{{ item.label }}</option>
-</select>
-<small>可多选部门、角色和用户；范围外成员不能创建会话或运行此智能体。</small>
-</template>
-</div>
-</template>
-<template v-else-if="builderStep === 2">
-<h3>模型与提示词</h3>
-<label>对话模型<select :value="selectedValue('model_version_id')" @change="setSingle('model_version_id', ($event.target as HTMLSelectElement).value)">
-<option value="">请选择模型</option>
-<option v-for="item in catalogFor('MODEL')" :key="item.version_id" :value="item.version_id">{{ optionLabel(item) }}</option>
-</select>
-</label>
-<label>系统提示词<select :value="selectedValue('prompt_version_id')" @change="setSingle('prompt_version_id', ($event.target as HTMLSelectElement).value)">
-<option value="">不使用提示词</option>
-<option v-for="item in catalogFor('PROMPT')" :key="item.version_id" :value="item.version_id">{{ optionLabel(item) }}</option>
-</select>
-</label>
-</template>
-<template v-else-if="builderStep === 3">
-<h3>Skills 与 Tools</h3>
-<label>已发布技能<select multiple :value="selectedValues('skill_version_ids')" @change="setMany('skill_version_ids', $event)">
-<option v-for="item in catalogFor('SKILL')" :key="item.version_id" :value="item.version_id">{{ optionLabel(item) }}</option>
-</select>
-</label>
-<label>直接工具（含 Dify Flow）<select multiple :value="selectedValues('tool_version_ids')" @change="setMany('tool_version_ids', $event)">
-<option v-for="item in catalogFor('TOOL')" :key="item.version_id" :value="item.version_id">{{ optionLabel(item) }}</option>
-</select>
-</label>
-<label>MCP 连接<select multiple :value="selectedValues('mcp_connection_version_ids')" @change="setMany('mcp_connection_version_ids', $event)">
-<option v-for="item in catalogFor('MCP_CONNECTION')" :key="item.version_id" :value="item.version_id">{{ optionLabel(item) }}</option>
-</select>
-</label>
-</template>
-<template v-else-if="builderStep === 4">
-<h3>知识与长期记忆</h3>
-<label>知识库<select multiple :value="selectedValues('knowledge_version_ids')" @change="setMany('knowledge_version_ids', $event)">
-<option v-for="item in catalogFor('KNOWLEDGE')" :key="item.version_id" :value="item.version_id">{{ optionLabel(item) }}</option>
-</select>
-</label>
-<label>Memory Policy<select :value="selectedValue('memory_policy_version_id')" @change="setSingle('memory_policy_version_id', ($event.target as HTMLSelectElement).value)">
-<option value="">不启用长期记忆</option>
-<option v-for="item in catalogFor('MEMORY_POLICY')" :key="item.version_id" :value="item.version_id">{{ optionLabel(item) }}</option>
-</select>
-</label>
-</template>
-<template v-else>
-<h3>发布预检</h3>
-<div v-if="!validation" class="empty-copy">点击“预检并发布”校验资源授权、依赖、模型与知识索引。</div>
-<div v-else>
-<div :class="['validation-result', validation.valid ? 'ok' : 'blocked']">
-<b>{{ validation.valid ? '预检通过' : '存在阻断问题' }}</b>
-<p v-for="issue in validation.blocking_errors" :key="issue.code">{{ issue.message }}</p>
-<p v-for="issue in validation.warnings" :key="issue.code">{{ issue.message }}</p>
-</div>
-<div class="change-grid">
-<div>
-<b>新增能力</b>
-<p>{{ validation.changes.added.join('、') || '无' }}</p>
-</div>
-<div>
-<b>移除能力</b>
-<p>{{ validation.changes.removed.join('、') || '无' }}</p>
-</div>
-</div>
-<button class="button primary" :disabled="!validation.valid || builderPublishing" @click="publishDraft">{{ builderPublishing ? '发布中…' : '确认发布并激活新 Revision' }}</button>
-</div>
-</template>
-<details class="advanced-json">
-<summary @click="showAdvancedJson = !showAdvancedJson">高级 JSON 配置</summary>
-<textarea v-model="draftJson" rows="14" />
-<button class="button ghost" @click="applyAdvancedJson">应用 JSON</button>
-</details>
-</section>
-<aside class="assembly-summary">
-<h3>当前组装</h3>
-<p>已选资源会在发布前进行递归授权与依赖校验。</p>
-<section v-for="(items, type) in draftCapabilityGroups" :key="type">
-<b>{{ typeLabel(type) }} · {{ items.length }}</b>
-<span v-for="item in items" :key="item.version_id">{{ item.display_name }} <small>V{{ item.version_number }}</small>
-</span>
-</section>
-<p v-if="!Object.keys(draftCapabilityGroups).length" class="empty-copy">尚未选择能力。</p>
-</aside>
-</div>
 </section>
       </section>
 
@@ -1474,17 +1386,24 @@ onMounted(loadSession)
 </section>
     </section>
 
-    <aside v-if="selectedResource" class="detail-drawer">
+    <aside v-if="selectedResource" class="detail-drawer resource-detail-page">
 <header>
 <div>
+<button class="text-link" @click="closeDetail">‹ 返回列表</button>
 <p class="eyebrow">{{ typeLabel(selectedResource.resource.resource_type) }} · {{ selectedResource.source }}</p>
 <h2>{{ selectedResource.resource.display_name }}</h2>
 <p>{{ selectedResource.resource.description || selectedResource.resource.slug }}</p>
 </div>
-<button class="icon-button" @click="selectedResource = null; selectedKnowledge = null">×</button>
+<button class="icon-button" aria-label="关闭详情" @click="closeDetail">×</button>
 </header>
+<nav class="resource-detail-tabs" aria-label="资源详情导航">
+<button :class="{ active: resourceDetailTab === 'OVERVIEW' }" @click="resourceDetailTab = 'OVERVIEW'">概览</button>
+<button :class="{ active: resourceDetailTab === 'VERSIONS' }" @click="resourceDetailTab = 'VERSIONS'">版本与依赖</button>
+<button :class="{ active: resourceDetailTab === 'GOVERNANCE' }" @click="resourceDetailTab = 'GOVERNANCE'">权限与引用</button>
+<button :class="{ active: resourceDetailTab === 'TECHNICAL' }" @click="resourceDetailTab = 'TECHNICAL'">技术摘要</button>
+</nav>
 <div class="drawer-body">
-<section class="detail-metrics">
+<section v-if="resourceDetailTab === 'OVERVIEW'" class="detail-metrics">
 <span>
 <b>{{ selectedResource.resource.published_version_count }}</b> 发布版本</span>
 <span>
@@ -1492,7 +1411,7 @@ onMounted(loadSession)
 <span>
 <b>{{ selectedResource.grants_count }}</b> 授权规则</span>
 </section>
-<section class="metadata-list">
+<section v-if="resourceDetailTab === 'OVERVIEW'" class="metadata-list">
 <h3>来源与说明</h3>
 <div class="resource-semantics" v-if="selectedResource.one_line_summary">
 <strong>{{ selectedResource.one_line_summary }}</strong>
@@ -1541,7 +1460,7 @@ onMounted(loadSession)
 <button class="button primary" :disabled="resourceSaving" @click="saveDescriptor">保存资源信息</button>
 </div>
 </section>
-<section v-if="selectedResource.resource.source_type === 'DIFY'" class="dify-detail-section">
+<section v-if="resourceDetailTab === 'OVERVIEW' && selectedResource.resource.source_type === 'DIFY'" class="dify-detail-section">
 <h3>Dify 应用信息</h3>
 <div class="dify-detail-grid">
 <span><small>应用类型</small><b>{{ selectedResource.safe_config.flow_type || '—' }}</b></span>
@@ -1558,7 +1477,7 @@ onMounted(loadSession)
 </div>
 <p class="dify-security-note">API Key 已保存在平台 Vault，详情和 API 响应均不返回密钥值或 secret_ref。</p>
 </section>
-<section v-if="selectedKnowledge">
+<section v-if="resourceDetailTab === 'OVERVIEW' && selectedKnowledge">
 <h3>知识库内容</h3>
 <div class="detail-metrics">
 <span>
@@ -1582,11 +1501,12 @@ onMounted(loadSession)
 </article>
 </section>
 <DiscoveryDriftPanel
+  v-if="resourceDetailTab === 'VERSIONS'"
   :versions="selectedResource.versions"
   :csrf="csrf"
   :supported="['DIFY', 'MCP', 'HTTP', 'RAGFLOW'].includes(selectedResource.resource.source_type || selectedResource.source)"
 />
-<section>
+<section v-if="resourceDetailTab === 'VERSIONS'">
 <h3>版本</h3>
 <article v-for="version in selectedResource.versions" :key="version.version_id" class="version-card">
 <div>
@@ -1597,7 +1517,7 @@ onMounted(loadSession)
 <small>{{ version.content_hash.slice(0, 12) }}</small>
 </article>
 </section>
-<section v-if="selectedResource.dependency_graph.length">
+<section v-if="resourceDetailTab === 'VERSIONS' && selectedResource.dependency_graph.length">
 <h3>版本依赖</h3>
 <article v-for="node in selectedResource.dependency_graph" :key="node.version_id" class="reference-item">
 <b>{{ node.display_name }}</b>
@@ -1609,7 +1529,7 @@ onMounted(loadSession)
 </div>
 </article>
 </section>
-<section>
+<section v-if="resourceDetailTab === 'GOVERNANCE'">
 <h3>授权与有效权限</h3>
 <p v-if="!selectedResource.effective_permissions.length" class="empty-copy">当前用户没有额外授权规则。</p>
 <article v-for="permission in selectedResource.effective_permissions" :key="`${permission.origin}-${permission.subject_id || ''}-${permission.actions.join('-')}`" class="reference-item">
@@ -1617,7 +1537,7 @@ onMounted(loadSession)
 <small>{{ permission.subject_id || '当前资源' }} · {{ permission.actions.join(' / ') }}</small>
 </article>
 </section>
-<section>
+<section v-if="resourceDetailTab === 'GOVERNANCE'">
 <h3>引用关系</h3>
 <p v-if="!selectedResource.references.length" class="empty-copy">当前未被 Agent Version 引用。</p>
 <article v-for="item in selectedResource.references" :key="`${item.agent_id}-${item.version_number}`" class="reference-item">
@@ -1625,8 +1545,9 @@ onMounted(loadSession)
 <small>{{ item.kind }} · V{{ item.version_number }}</small>
 </article>
 </section>
-<section>
+<section v-if="resourceDetailTab === 'TECHNICAL'" class="technical-summary">
 <h3>安全配置摘要</h3>
+<p>这里只展示后端脱敏后的结构，密钥、Token 与 Vault 引用不会返回前端。</p>
 <pre>{{ JSON.stringify(selectedResource.safe_config, null, 2) }}</pre>
 </section>
 <footer class="drawer-footer">
@@ -1634,7 +1555,6 @@ onMounted(loadSession)
 </footer>
 </div>
 </aside>
-    <div v-if="selectedResource" class="drawer-backdrop" @click="selectedResource = null" />
     <p v-if="error" class="toast error">{{ error }}</p>
   </main>
 </template>

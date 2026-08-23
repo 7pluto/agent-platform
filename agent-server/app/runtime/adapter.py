@@ -23,6 +23,7 @@ from app.resources.registry_models import ResourceType
 from app.resources.registry_store import ResourceRegistryStore
 from app.mcp.service import mcp_auth_headers, mcp_client
 from app.runtime.models import ExecutionManifest, RunRecord
+from app.runtime.observation import observation_policy
 from app.runtime.dify_flow import DifyFlowClient
 from app.runtime.http_tool import http_tool_client
 from app.conversation.store_factory import get_conversation_store
@@ -216,14 +217,13 @@ class OpenAICompatibleRuntimeAdapter(RuntimeAdapter):
                             await emit("dify.flow.completed", {"tool": name, "retriever_resource_count": len(resources), "conversation_id": result.get("conversation_id"), "workflow_run_id": result.get("workflow_run_id")})
                             if resources:
                                 await emit("dify.rag.retrieved", {"tool": name, "resources": resources})
-                    # Runtime events retain the complete auditable result.  The model only
-                    # needs a bounded observation to formulate its next answer; feeding
-                    # full RAG chunks back can turn a small user query into a multi-minute
-                    # upstream request (and leaks unnecessary source content into context).
+                    # The model receives a bounded observation. The Worker applies the
+                    # same ObservationPolicy to persisted trace events, so neither path
+                    # records unbounded upstream payloads or credentials.
                     messages.append({
                         "role": "tool",
                         "tool_call_id": call.get("id"),
-                        "content": json.dumps(self._model_tool_observation(configs.get(str(name), {}), result), ensure_ascii=False),
+                        "content": json.dumps(observation_policy.bound_model_observation(self._model_tool_observation(configs.get(str(name), {}), result)), ensure_ascii=False),
                     })
                     tool_steps += 1
 
