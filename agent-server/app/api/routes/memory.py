@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 
 from app.api.dependencies import ensure_resource_action, require_fresh_mutation_principal, require_fresh_principal
 from app.control_plane.assembly import is_resource_assembly_v2
@@ -63,6 +63,7 @@ async def list_my_memory(deployment_id: UUID, principal: Principal = Depends(req
     return await store.list_mine(deployment_id, principal)
 
 
-@router.delete("/memory-items/{memory_id}", status_code=204)
-async def delete_my_memory(memory_id: UUID, principal: Principal = Depends(require_fresh_mutation_principal)) -> None:
+@router.delete("/memory-items/{memory_id}", status_code=204, response_class=Response)
+async def delete_my_memory(memory_id: UUID, principal: Principal = Depends(require_fresh_mutation_principal)) -> Response:
     await store.delete_mine(memory_id, principal)
+    return Response(status_code=204)

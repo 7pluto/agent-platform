@@ -171,7 +171,7 @@ export interface ResourceGrant {
   created_at: string
 }
 
-export type RegistryResourceType = 'PROMPT' | 'SKILL' | 'TOOL' | 'MCP_SERVER' | 'MCP_CONNECTION' | 'KNOWLEDGE' | 'MEMORY_POLICY'
+export type RegistryResourceType = 'PROMPT' | 'SKILL' | 'TOOL' | 'MCP_SERVER' | 'MCP_CONNECTION' | 'KNOWLEDGE_CONNECTION' | 'KNOWLEDGE' | 'MEMORY_POLICY'
 export interface RegistryResource {
   resource_id: string
   tenant_id: string
@@ -250,6 +250,27 @@ export interface ResourceDetail {
     dependencies: Array<{ version_id: string; display_name: string; resource_type: string; version_number?: number }>
   }>
   effective_permissions: Array<{ origin: string; effect: string; subject_id?: string; actions: string[] }>
+}
+export interface DiscoverySnapshot {
+  snapshot_id: string
+  resource_version_id: string
+  provider: string
+  external_type: string
+  external_id: string
+  schema_hash: string
+  snapshot: Record<string, unknown>
+  created_at: string
+}
+export interface DriftReport {
+  resource_version_id: string
+  provider: string
+  status: 'NO_CHANGE' | 'CHANGED' | 'MISSING' | 'UNAVAILABLE'
+  published_schema_hash: string
+  current_schema_hash?: string
+  message?: string
+  current_snapshot?: Record<string, unknown>
+  draft_version_id?: string
+  checked_at: string
 }
 export interface KnowledgeOverview {
   resource_id: string; resource_version_id: string; display_name: string; description?: string
@@ -390,6 +411,10 @@ export const api = {
   }),
   publishResourceVersion: (resourceVersionId: string, csrf: string) => request<RegistryResourceVersion>(`/api/v1/resource-versions/${resourceVersionId}/publish`, {
     method: 'POST', headers: { 'X-CSRF-Token': csrf },
+  }),
+  listDiscoverySnapshots: (resourceVersionId: string) => request<DiscoverySnapshot[]>(`/api/v1/resource-versions/${resourceVersionId}/discovery-snapshots`),
+  checkResourceDrift: (resourceVersionId: string, csrf: string, createDraft = true) => request<DriftReport>(`/api/v1/resource-versions/${resourceVersionId}/drift-check`, {
+    method: 'POST', headers: { 'X-CSRF-Token': csrf }, body: JSON.stringify({ create_draft: createDraft }),
   }),
   testResourceVersion: (resourceVersionId: string, csrf: string) => request<{ available: boolean; flow_type: string; has_retrieval: boolean }>(`/api/v1/resource-versions/${resourceVersionId}/test`, {
     method: 'POST', headers: { 'X-CSRF-Token': csrf },

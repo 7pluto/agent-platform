@@ -23,6 +23,7 @@ from app.core.errors import ApiError
 from app.core.secrets import reject_secret_values
 from app.control_plane.specification import validate_agent_specification
 from app.control_plane.assembly import is_resource_assembly_v2, validate_agent_assembly
+from app.control_plane.validation import get_agent_validation_service
 from app.db.models import AgentDefinitionRow, AgentVersionRow, DeploymentPublishIdempotencyRow, DeploymentRevisionRow, DeploymentRow
 from app.db.rls import set_local_tenant_context
 from app.db.session import get_session_factory
@@ -241,7 +242,7 @@ class PostgresControlPlaneStore:
         """Atomically version, publish, revise and activate one Deployment."""
         reject_secret_values(specification, "agent.version.specification")
         validate_agent_specification(specification)
-        await validate_agent_assembly(specification, principal)
+        await get_agent_validation_service().require_valid(specification, principal)
         async with self._session(principal) as session:
             async with session.begin():
                 await set_local_tenant_context(session, principal.tenant_id, principal.external_user_id)

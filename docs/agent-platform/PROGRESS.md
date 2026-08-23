@@ -194,3 +194,20 @@ Stage 4 foundation: resource registry, Agent Assembly V2, worker deployment and 
 - Runtime connection expansion moved to a provider-context resolver. The runtime no longer contains a RAGFlow-specific connection branch; published Knowledge versions resolve their immutable Knowledge Connection generically before a provider is selected.
 - The add-resource wizard now supports RAGFlow Dataset discovery from a selected published RAGFlow Connection and registers the selected Dataset as a semantic Knowledge resource with the normal descriptor and RuoYi `VIEW`/`USE` publication scope. Dataset identifiers remain in immutable server-side configuration and are not included in model-visible capability text.
 - Verification: Python compileall and focused Knowledge Provider/resource/runtime tests pass (15 passed). Vue production build was not re-run because the local build approval was denied by the client usage limit; no workaround or deployment was attempted.
+# 2026-08-24 — V1.5 Iteration P: Provider-aware Agent Publish Validation（本地完成）
+
+- 新增 `AgentValidationService`，并把它放入最终 `publish_configuration` 原子命令前，而不仅是前端“预检查”。Blocking 失败时不会创建 Agent Version、Revision 或切换 Active Revision。
+- 发布校验现在区分 Knowledge Provider：LOCAL 检查 Active Index；RAGFlow 检查 Dataset 存在性、连接可用性、漂移与检索测试；REMOTE_HTTP 检查检索测试，不再错误要求 pgvector Index。
+- Dify 发布检查成功 Validate 记录与当前连接；MCP Connection 执行实际 Probe；HTTP Tool 检查成功 TEST 记录；所有资源检查 Archived 状态及 Vault Secret 是否仍为 ACTIVE。
+- Knowledge 检索测试现在持久化安全的 TEST 结果，只记录 Provider、命中数、耗时和安全错误，不记录查询原文与 chunk 内容。
+- 验证：新增 Provider-aware 发布校验测试；后端全量 82 tests passed；Python compileall 通过。
+
+# 2026-08-24 — V1.5 Iteration L: Discovery Snapshot + Drift（本地完成）
+
+- 新增 tenant-RLS `platform_resource_discovery_snapshot` 与迁移 `0026_discovery_snapshots`。Dify、MCP Tool、RAGFlow Knowledge 和受控 HTTP Tool 发布时保存不可变、canonical hash 的安全发现快照；凭据、Authorization 和 `secret_ref` 不进入快照。
+- 新增统一漂移检查 API。状态固定为 `NO_CHANGE / CHANGED / MISSING / UNAVAILABLE`；上游变化不会修改 Published Version，`CHANGED` 会幂等创建新的 Draft Version，重复检查不会产生重复草稿。
+- RAGFlow Knowledge 在注册时固化可信 Dataset 名称/说明；MCP Tool 固化发现到的说明和 Schema。外部 ID 仍只存在于服务器侧配置与管理员治理数据中，不暴露给模型。
+- 资源详情新增“上游定义与漂移”卡片，展示业务摘要、发布指纹和可读状态；变化时明确提示已创建待审核 Draft，不默认平铺 raw JSON。
+- 修复 Memory、资源和 Agent 删除接口的 HTTP 204 响应契约，使应用在当前 FastAPI 版本下可以正常导入并生成 OpenAPI。
+- 新增 `TEST_CASES_V1_5.md`，区分已自动化通过和仍待真实 Provider/业务环境执行的案例。
+- 验证：Python compileall 通过；本轮后端基线最终为 82 tests passed；Console `vue-tsc --noEmit` 与 Vite production build 通过。仅保留既有 Windows pytest cache 权限告警。

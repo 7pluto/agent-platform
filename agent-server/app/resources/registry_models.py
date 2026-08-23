@@ -101,3 +101,35 @@ class ResourceExternalBindingRecord(BaseModel):
     status: ExternalBindingStatus = ExternalBindingStatus.MANAGED
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class DiscoveryDriftStatus(StrEnum):
+    NO_CHANGE = "NO_CHANGE"
+    CHANGED = "CHANGED"
+    MISSING = "MISSING"
+    UNAVAILABLE = "UNAVAILABLE"
+
+
+class ResourceDiscoverySnapshotRecord(BaseModel):
+    snapshot_id: UUID = Field(default_factory=uuid4)
+    tenant_id: str
+    resource_version_id: UUID
+    provider: str
+    external_type: str
+    external_id: str
+    schema_hash: str
+    snapshot: dict[str, Any] = Field(default_factory=dict)
+    created_by: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class ResourceDriftReport(BaseModel):
+    resource_version_id: UUID
+    provider: str
+    status: DiscoveryDriftStatus
+    published_schema_hash: str
+    current_schema_hash: str | None = None
+    message: str | None = None
+    current_snapshot: dict[str, Any] | None = None
+    draft_version_id: UUID | None = None
+    checked_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

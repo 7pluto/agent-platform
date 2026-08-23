@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from time import perf_counter
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
@@ -10,8 +11,9 @@ from app.iam.models import Principal
 from app.knowledge.models import IngestJobRecord, KnowledgeDocumentRecord, KnowledgeIndexRecord
 from app.knowledge.providers import knowledge_provider_registry
 from app.knowledge.providers.context import resolve_knowledge_provider_config
-from app.resources.registry_models import ResourceType
+from app.resources.registry_models import ResourceType, ResourceValidationStatus, ResourceValidationType
 from app.resources.registry_factory import get_resource_registry
+from app.resources.validation import get_resource_validation_service
 from app.knowledge.service import get_knowledge_file_service
 from app.knowledge.jobs import ingest_jobs
 
@@ -89,9 +91,26 @@ async def retrieval_test(request: RetrievalTestRequest, principal: Principal = D
     resource = await _published_knowledge(principal, request.knowledge_resource_version_id)
     config = await resolve_knowledge_provider_config(resource, principal)
     provider = knowledge_provider_registry.resolve(config, principal)
-    result = await provider.search(
-        knowledge_version_id=str(resource.resource_version_id), config=config,
-        query=request.query, top_k=request.top_k,
+    started = perf_counter()
+    try:
+        result = await provider.search(
+            knowledge_version_id=str(resource.resource_version_id), config=config,
+            query=request.query, top_k=request.top_k,
+        )
+    except Exception as exc:
+        from app.core.errors import ApiError
+        code = exc.code if isinstance(exc, ApiError) else "KNOWLEDGE_TEST_FAILED"
+        message = exc.message if isinstance(exc, ApiError) else type(exc).__name__
+        await get_resource_validation_service().record(
+            resource.resource_version_id, ResourceValidationType.TEST, ResourceValidationStatus.FAILED,
+            {"provider": str(config.get("provider", "LOCAL")), "code": code, "message": message},
+            principal, round((perf_counter() - started) * 1000),
+        )
+        raise
+    await get_resource_validation_service().record(
+        resource.resource_version_id, ResourceValidationType.TEST, ResourceValidationStatus.SUCCEEDED,
+        {"provider": result.provider, "hit_count": len(result.hits)},
+        principal, round((perf_counter() - started) * 1000),
     )
     return [KnowledgeRetrievalHit(
         document_id=hit.id, chunk_number=index + 1, content=hit.content,

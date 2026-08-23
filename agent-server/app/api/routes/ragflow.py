@@ -13,9 +13,11 @@ from app.knowledge.providers.ragflow import RagflowKnowledgeProvider
 from app.resources.registry_factory import get_resource_registry
 from app.resources.registry_models import ResourceDefinitionCreate, ResourceType, ResourceVersionCreate, ResourceVersionRecord
 from app.resources.registry_store import ResourceRegistryStore
+from app.resources.discovery import get_resource_discovery_service
 from app.secrets.vault import get_secret_vault
 
 router = APIRouter(tags=["ragflow"])
+discovery_snapshots = get_resource_discovery_service()
 
 class RagflowConnectionCreate(BaseModel):
     slug: str = Field(pattern=r"^[a-z][a-z0-9-]{2,63}$")
@@ -58,9 +60,18 @@ async def register_ragflow_knowledge(request: RagflowDatasetRegister, principal:
     if connection.resource_type != ResourceType.KNOWLEDGE_CONNECTION:
         raise ApiError(422, "RESOURCE_TYPE_MISMATCH", "connection version is not a knowledge connection")
     datasets = await RagflowKnowledgeProvider(principal).discover_datasets(connection.config)
-    if not any(item["id"] == request.dataset_id for item in datasets):
+    dataset = next((item for item in datasets if item["id"] == request.dataset_id), None)
+    if dataset is None:
         raise ApiError(409, "RAGFLOW_DATASET_NOT_DISCOVERED", "dataset must be discovered before registration")
-    config = {"provider": "RAGFLOW", "connection_version_id": str(request.connection_version_id), "external_dataset_id": request.dataset_id}
+    config = {
+        "provider": "RAGFLOW",
+        "connection_version_id": str(request.connection_version_id),
+        "external_dataset_id": request.dataset_id,
+        "external_dataset_name": dataset["name"],
+        "external_dataset_description": dataset.get("description"),
+    }
     definition = await registry.create_definition(ResourceDefinitionCreate(resource_type=ResourceType.KNOWLEDGE, slug=request.slug, display_name=request.display_name, description=request.description, draft_config=config), principal)
     version = await registry.create_version(definition.resource_id, ResourceVersionCreate(config=config), principal)
-    return await registry.publish_version(version.resource_version_id, principal)
+    published = await registry.publish_version(version.resource_version_id, principal)
+    await discovery_snapshots.capture_published(published, principal)
+    return published

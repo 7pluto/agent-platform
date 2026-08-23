@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import auth, control_plane, conversations, governance, resources, resource_registry, knowledge, memory, mcp, health, iam, runs, secrets, workbench, ragflow
+from app.api.routes import auth, control_plane, conversations, discovery, governance, resources, resource_registry, knowledge, memory, mcp, health, iam, runs, secrets, workbench, ragflow
 from app.config import get_settings
 from app.core.errors import ApiError, api_error_handler
 from app.api.dependencies import get_iam_service
@@ -41,6 +41,7 @@ app.include_router(governance.router, prefix=settings.api_prefix)
 app.include_router(conversations.router, prefix=settings.api_prefix)
 app.include_router(resources.router, prefix=settings.api_prefix)
 app.include_router(resource_registry.router, prefix=settings.api_prefix)
+app.include_router(discovery.router, prefix=settings.api_prefix)
 app.include_router(knowledge.router, prefix=settings.api_prefix)
 app.include_router(memory.router, prefix=settings.api_prefix)
 app.include_router(mcp.router, prefix=settings.api_prefix)

@@ -4,12 +4,13 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Header, Query
+from fastapi import APIRouter, Depends, Header, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select
 
 from app.api.dependencies import ensure_resource_action, is_platform_admin, require_fresh_principal, require_platform_admin, require_platform_admin_read
 from app.control_plane.assembly import agent_resource_ids, validate_agent_assembly
+from app.control_plane.validation import get_agent_validation_service
 from app.control_plane.store_factory import get_control_plane_store
 from app.config import get_settings
 from app.core.errors import ApiError
@@ -806,8 +807,8 @@ async def workbench_knowledge_overview(resource_id: UUID, principal: Principal =
         await _close_tx(session)
 
 
-@router.delete("/workbench/resources/{resource_id}", status_code=204)
-async def delete_workbench_resource(resource_id: UUID, principal: Principal = Depends(require_platform_admin)) -> None:
+@router.delete("/workbench/resources/{resource_id}", status_code=204, response_class=Response)
+async def delete_workbench_resource(resource_id: UUID, principal: Principal = Depends(require_platform_admin)) -> Response:
     """Delete only a capability that has never been assembled into an Agent Version."""
     if get_settings().storage_mode != "postgres":
         raise ApiError(409, "RESOURCE_DELETE_UNSUPPORTED", "resource deletion requires the persistent runtime")
@@ -871,6 +872,7 @@ async def delete_workbench_resource(resource_id: UUID, principal: Principal = De
     await get_governance_store().record_audit(
         principal, "resource.delete", deleted_type, str(resource_id), {}
     )
+    return Response(status_code=204)
 
 
 @router.get("/workbench/agents", response_model=AgentListPage)
@@ -966,8 +968,8 @@ async def workbench_deployment_detail(
     return await deployment_capabilities(deployment_id, principal)
 
 
-@router.delete("/workbench/deployments/{deployment_id}", status_code=204)
-async def delete_workbench_deployment(deployment_id: UUID, principal: Principal = Depends(require_platform_admin)) -> None:
+@router.delete("/workbench/deployments/{deployment_id}", status_code=204, response_class=Response)
+async def delete_workbench_deployment(deployment_id: UUID, principal: Principal = Depends(require_platform_admin)) -> Response:
     """Remove an unused Agent deployment without breaking run reproducibility."""
     if get_settings().storage_mode != "postgres":
         raise ApiError(409, "DEPLOYMENT_DELETE_UNSUPPORTED", "agent deletion requires the persistent runtime")
@@ -1000,6 +1002,7 @@ async def delete_workbench_deployment(deployment_id: UUID, principal: Principal 
         await _close_tx(session, commit=True)
     await get_governance_store().record_audit(principal, "deployment.delete", "DEPLOYMENT", str(deployment_id),
                                                {"agent_deleted": str(deleted_agent_id) if deleted_agent_id else None})
+    return Response(status_code=204)
 
 
 @router.get("/deployments/{deployment_id}/configuration-draft", response_model=ConfigurationDraft)
@@ -1088,13 +1091,12 @@ async def validate_configuration_draft(
 ) -> ConfigurationValidation:
     resolved = await get_control_plane_store().resolve(deployment_id, principal)
     catalog = {item.version_id: item for item in await _catalog(principal)}
-    errors: list[dict[str, str]] = []
-    warnings: list[dict[str, str]] = []
+    outcome = await get_agent_validation_service().validate(request.specification, principal)
+    errors = outcome.blocking_errors
+    warnings = outcome.warnings
     capabilities: list[CatalogItem] = []
     try:
-        from app.control_plane.assembly import resolve_agent_assembly
-        bindings = await resolve_agent_assembly(request.specification, principal)
-        resources = [binding.resource for binding in bindings]
+        bindings = outcome.bindings
         capability_ids = _capability_ids(request.specification)
         capabilities = [catalog[item] for item in capability_ids if item in catalog]
         resolved_capabilities = [
@@ -1107,21 +1109,10 @@ async def validate_configuration_draft(
             }
             for binding in bindings
         ]
-        for resource in resources:
-            if resource.resource_type == ResourceType.KNOWLEDGE:
-                session = await _tx(principal)
-                try:
-                    active_index = await session.scalar(select(KnowledgeIndexVersionRow.index_version_id).where(
-                        KnowledgeIndexVersionRow.tenant_id == principal.tenant_id,
-                        KnowledgeIndexVersionRow.knowledge_resource_version_id == resource.resource_version_id,
-                        KnowledgeIndexVersionRow.status == "ACTIVE",
-                    ))
-                finally:
-                    await _close_tx(session)
-                if active_index is None:
-                    errors.append({"code": "KNOWLEDGE_INDEX_NOT_ACTIVE", "message": f"{catalog.get(resource.resource_version_id).display_name if catalog.get(resource.resource_version_id) else 'Knowledge'} has no active index"})
     except ApiError as exc:
-        errors.append({"code": exc.code, "message": exc.message})
+        issue = {"code": exc.code, "message": exc.message}
+        if issue not in errors:
+            errors.append(issue)
     changes = _change_summary(resolved.agent_version.specification, request.specification, catalog)
     if not changes["added"] and not changes["removed"]:
         warnings.append({"code": "NO_CAPABILITY_CHANGE", "message": "Capability selection is unchanged; only runtime policy or metadata may differ."})

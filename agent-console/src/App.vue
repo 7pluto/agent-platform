@@ -9,6 +9,7 @@ import {
   type KnowledgeOverview, type MemoryItem, type Principal, type ResourceDetail, type ResourceListItem, type RunEvent, type RunObservabilitySummary,
 } from './api'
 import AgentModuleBoard from './components/AgentModuleBoard.vue'
+import DiscoveryDriftPanel from './components/DiscoveryDriftPanel.vue'
 
 type Space = 'workspace' | 'console'
 type WorkspaceView = 'agents' | 'chat'
@@ -1580,6 +1581,11 @@ onMounted(loadSession)
 <small>{{ index.status }} · {{ index.embedding_model }} · {{ shortTime(index.created_at) }}</small>
 </article>
 </section>
+<DiscoveryDriftPanel
+  :versions="selectedResource.versions"
+  :csrf="csrf"
+  :supported="['DIFY', 'MCP', 'HTTP', 'RAGFLOW'].includes(selectedResource.resource.source_type || selectedResource.source)"
+/>
 <section>
 <h3>版本</h3>
 <article v-for="version in selectedResource.versions" :key="version.version_id" class="version-card">

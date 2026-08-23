@@ -15,10 +15,12 @@ from app.resources.registry_factory import get_resource_registry
 from app.resources.registry_models import ExternalBindingStatus, ResourceDefinitionCreate, ResourceExternalBindingRecord, ResourceType, ResourceVersionCreate, ResourceVersionRecord, ResourceVersionStatus
 from app.resources.registry_store import ResourceRegistryStore
 from app.resources.bindings import get_external_binding_service
+from app.resources.discovery import get_resource_discovery_service
 from app.secrets.vault import get_secret_vault
 
 router = APIRouter(tags=["mcp"])
 bindings = get_external_binding_service()
+discovery_snapshots = get_resource_discovery_service()
 
 
 class McpDiscoveredTool(BaseModel):
@@ -143,6 +145,7 @@ async def create_mcp_connection(request: McpConnectionCreate, principal: Princip
     definition = await registry.create_definition(ResourceDefinitionCreate(resource_type=ResourceType.MCP_CONNECTION, slug=request.slug, display_name=request.display_name, draft_config=config), principal)
     version = await registry.create_version(definition.resource_id, ResourceVersionCreate(config=config), principal)
     published = await registry.publish_version(version.resource_version_id, principal)
+    await discovery_snapshots.capture_published(published, principal)
     from app.governance.store_factory import get_governance_store
     await get_governance_store().record_audit(principal, "mcp_connection.publish", "MCP_CONNECTION", str(published.resource_version_id), {"fingerprint": fingerprint})
     return published
@@ -215,6 +218,7 @@ async def register_discovered_tools_batch(
                     "kind": "MCP",
                     "connection_version_id": str(request.connection_version_id),
                     "tool_name": selection.tool_name,
+                    "description": item.get("description"),
                     "input_schema": item.get("inputSchema", {}),
                 },
             ),
@@ -229,7 +233,9 @@ async def register_discovered_tools_batch(
             principal=principal,
         )
         version = await registry.create_version(definition.resource_id, ResourceVersionCreate(), principal)
-        published.append(await registry.publish_version(version.resource_version_id, principal))
+        published_version = await registry.publish_version(version.resource_version_id, principal)
+        await discovery_snapshots.capture_published(published_version, principal)
+        published.append(published_version)
     return published
 
 
@@ -247,13 +253,15 @@ async def register_discovered_tool(request: RegisterDiscoveredToolRequest, princ
     if match is None:
         from app.core.errors import ApiError
         raise ApiError(409, "MCP_TOOL_NOT_DISCOVERED", "tool must be discovered before registration")
-    definition = await registry.create_definition(ResourceDefinitionCreate(resource_type=ResourceType.TOOL, slug=request.slug, display_name=request.display_name, description=request.description or match.get("description"), draft_config={"kind": "MCP", "connection_version_id": str(request.connection_version_id), "tool_name": request.tool_name, "input_schema": match.get("inputSchema", {})}), principal)
+    definition = await registry.create_definition(ResourceDefinitionCreate(resource_type=ResourceType.TOOL, slug=request.slug, display_name=request.display_name, description=request.description or match.get("description"), draft_config={"kind": "MCP", "connection_version_id": str(request.connection_version_id), "tool_name": request.tool_name, "description": match.get("description"), "input_schema": match.get("inputSchema", {})}), principal)
     await bindings.register_discovered(
         provider="MCP", connection_resource_id=connection.resource_id, external_type="TOOL",
         external_id=request.tool_name, resource_id=definition.resource_id, principal=principal,
     )
     version = await registry.create_version(definition.resource_id, ResourceVersionCreate(), principal)
-    return await registry.publish_version(version.resource_version_id, principal)
+    published = await registry.publish_version(version.resource_version_id, principal)
+    await discovery_snapshots.capture_published(published, principal)
+    return published
 
 
 @router.get("/mcp-connections/{resource_version_id}/bindings", response_model=list[ResourceExternalBindingRecord])

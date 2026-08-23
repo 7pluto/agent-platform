@@ -24,6 +24,7 @@ from app.resources.registry_models import (
     ResourceValidationStatus, ResourceValidationType, ResourceVersionCreate, ResourceVersionRecord,
 )
 from app.resources.validation import get_resource_validation_service
+from app.resources.discovery import get_resource_discovery_service
 from app.runtime.dify_flow import DifyFlowClient
 from app.runtime.http_tool import http_tool_client
 from app.resources.providers.registry import provider_registry
@@ -32,6 +33,7 @@ from app.secrets.vault import get_secret_vault
 router = APIRouter(tags=["resource-registry"])
 store = get_resource_registry()
 validation_runs = get_resource_validation_service()
+discovery_snapshots = get_resource_discovery_service()
 
 
 class DifyApplicationCreate(BaseModel):
@@ -263,6 +265,7 @@ async def create_dify_application(request: DifyApplicationCreate, principal: Pri
     version = await store.create_version(definition.resource_id, ResourceVersionCreate(config=config), principal)
     await validation_runs.record(version.resource_version_id, ResourceValidationType.VALIDATE, ResourceValidationStatus.SUCCEEDED, connection_test, principal)
     published = await store.publish_version(version.resource_version_id, principal)
+    await discovery_snapshots.capture_published(published, principal)
     await _save_dify_descriptor(request, published.resource_id, principal)
     governance = get_governance_store()
     grants: list[ResourceGrantRecord] = []
@@ -318,6 +321,7 @@ async def create_dify_flow_tool(request: DifyFlowToolCreate, principal: Principa
     version = await store.create_version(definition.resource_id, ResourceVersionCreate(config=config), principal)
     await validation_runs.record(version.resource_version_id, ResourceValidationType.VALIDATE, ResourceValidationStatus.SUCCEEDED, connection_test, principal)
     published = await store.publish_version(version.resource_version_id, principal)
+    await discovery_snapshots.capture_published(published, principal)
     await get_governance_store().record_audit(principal, "dify_flow_tool.publish", "TOOL", str(published.resource_version_id), {
         "resource_id": str(published.resource_id), "secret_ref": secret.secret_ref, "fingerprint": secret.fingerprint,
     })
@@ -382,6 +386,7 @@ async def create_http_tool(request: HttpToolCreate, principal: Principal = Depen
         round((perf_counter() - started) * 1000),
     )
     published = await store.publish_version(version.resource_version_id, principal)
+    await discovery_snapshots.capture_published(published, principal)
     await get_governance_store().record_audit(
         principal,
         "http_tool.publish",
@@ -434,6 +439,7 @@ async def publish_resource_version(resource_version_id: UUID, principal: Princip
         if not await validation_runs.has_successful_validation(resource_version_id, principal, ResourceValidationType.TEST):
             raise ApiError(409, "RESOURCE_TEST_REQUIRED", "HTTP Tool must pass a test before publish")
     record = await store.publish_version(resource_version_id, principal)
+    await discovery_snapshots.capture_published(record, principal)
     await get_governance_store().record_audit(principal, "resource_version.publish", record.resource_type.value, str(record.resource_version_id), {"content_hash": record.content_hash})
     return record
 
