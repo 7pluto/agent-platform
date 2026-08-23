@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -116,6 +116,7 @@ class ResourceListItem(BaseModel):
     audience: str | None = None
     publication_scope: str = "PERSONAL"
     lifecycle_status: str = "ACTIVE"
+    health: str = "UNKNOWN"
     tags: list[str] = Field(default_factory=list)
 
 
@@ -149,6 +150,18 @@ class ResourceDetail(BaseModel):
     publication_scope: str = "PERSONAL"
     dependency_graph: list[dict[str, Any]] = Field(default_factory=list)
     effective_permissions: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ResourceImpact(BaseModel):
+    resource_id: UUID
+    can_delete: bool
+    blockers: list[str] = Field(default_factory=list)
+    agent_versions: list[dict[str, Any]] = Field(default_factory=list)
+    dependent_resources: list[dict[str, Any]] = Field(default_factory=list)
+    active_deployments: list[dict[str, Any]] = Field(default_factory=list)
+    grant_count: int = 0
+    recent_run_count: int = 0
+    knowledge_document_count: int = 0
 
 
 class ResourceDescriptorUpdate(BaseModel):
@@ -281,13 +294,17 @@ def _summary(resource_type: str, config: dict[str, Any]) -> str:
 
 
 def _health(resource_type: str, config: dict[str, Any]) -> str:
+    normalized = str(config.get("health_status") or "UNKNOWN").upper()
+    external_health = normalized if normalized in {"HEALTHY", "DEGRADED", "UNHEALTHY", "UNKNOWN"} else "UNKNOWN"
     if resource_type == "MODEL":
-        return str(config.get("availability") or "UNKNOWN")
+        return {"AVAILABLE": "HEALTHY", "UNAVAILABLE": "UNHEALTHY"}.get(str(config.get("availability") or "UNKNOWN"), "UNKNOWN")
     if resource_type == "KNOWLEDGE":
-        return "EXTERNAL" if str(config.get("provider") or "LOCAL").upper() != "LOCAL" else ("INDEXED" if config.get("active_index_version") else "UNKNOWN")
+        if str(config.get("provider") or "LOCAL").upper() == "LOCAL":
+            return "HEALTHY" if config.get("active_index_version") else "DEGRADED"
+        return external_health
     if resource_type in {"TOOL", "MCP_CONNECTION", "KNOWLEDGE_CONNECTION"}:
-        return "CONFIGURED"
-    return "READY"
+        return "HEALTHY" if config.get("kind") == "NATIVE" else external_health
+    return "HEALTHY"
 
 
 async def _descriptors(principal: Principal) -> dict[tuple[str, UUID], dict[str, Any]]:
@@ -384,6 +401,16 @@ def _descriptor_values(
 async def _catalog(principal: Principal) -> list[CatalogItem]:
     items: list[CatalogItem] = []
     descriptors = await _descriptors(principal)
+    active_local_indexes: set[UUID] = set()
+    if get_settings().storage_mode == "postgres":
+        session = await _tx(principal)
+        try:
+            active_local_indexes = set((await session.scalars(select(KnowledgeIndexVersionRow.knowledge_resource_version_id).where(
+                KnowledgeIndexVersionRow.tenant_id == principal.tenant_id,
+                KnowledgeIndexVersionRow.status == "ACTIVE",
+            ))).all())
+        finally:
+            await _close_tx(session)
     model_store = get_resource_store()
     for definition in await model_store.list_models(principal):
         for version in await model_store.list_model_versions(definition.model_id, principal):
@@ -419,13 +446,16 @@ async def _catalog(principal: Principal) -> list[CatalogItem]:
         )
         descriptor = _descriptor_values(descriptors, version.resource_type.value, version.resource_id,
                                         fallback_owner=definition.created_by, fallback_source=fallback_source)
+        health_config = dict(version.config)
+        if version.resource_type == ResourceType.KNOWLEDGE and version.resource_version_id in active_local_indexes:
+            health_config["active_index_version"] = True
         items.append(CatalogItem(
             version_id=version.resource_version_id, resource_id=version.resource_id,
             resource_type=version.resource_type.value, display_name=definition.display_name,
             description=definition.description, version_number=version.version_number,
             status=version.status.value, content_hash=version.content_hash,
             summary=_summary(version.resource_type.value, version.config), dependencies=dependencies,
-            health=_health(version.resource_type.value, version.config), **descriptor,
+            health=_health(version.resource_type.value, health_config), **descriptor,
         ))
     return sorted(items, key=lambda item: (item.resource_type, item.display_name.lower(), item.version_number))
 
@@ -447,6 +477,95 @@ async def _close_tx(session, commit: bool = False) -> None:
 
 def _capability_ids(specification: dict[str, Any]) -> list[UUID]:
     return [resource_id for _, resource_id in agent_resource_ids(specification)]
+
+
+async def _resource_impact(session, principal: Principal, resource_id: UUID, *, is_model: bool) -> ResourceImpact:
+    version_uuid_ids = (await session.scalars(
+        select(ModelVersionRow.model_version_id).where(
+            ModelVersionRow.tenant_id == principal.tenant_id, ModelVersionRow.model_id == resource_id
+        ) if is_model else select(ResourceVersionRow.resource_version_id).where(
+            ResourceVersionRow.tenant_id == principal.tenant_id, ResourceVersionRow.resource_id == resource_id
+        )
+    )).all()
+    version_ids = {str(item) for item in version_uuid_ids}
+
+    definition_rows = (await session.scalars(select(ResourceDefinitionRow).where(
+        ResourceDefinitionRow.tenant_id == principal.tenant_id))).all()
+    definitions = {row.resource_id: row for row in definition_rows}
+    dependent_resources: list[dict[str, Any]] = []
+    candidates = (await session.scalars(select(ResourceVersionRow).where(
+        ResourceVersionRow.tenant_id == principal.tenant_id))).all()
+    seen_dependencies: set[UUID] = set()
+    for candidate in candidates:
+        dependencies = [str(value) for field in ("tool_version_ids", "knowledge_version_ids") for value in candidate.config.get(field, [])]
+        for field in ("connection_version_id", "embedding_model_version_id"):
+            if candidate.config.get(field):
+                dependencies.append(str(candidate.config[field]))
+        if any(value in version_ids for value in dependencies) and candidate.resource_id not in seen_dependencies:
+            seen_dependencies.add(candidate.resource_id)
+            definition = definitions.get(candidate.resource_id)
+            dependent_resources.append({
+                "resource_id": str(candidate.resource_id),
+                "display_name": definition.display_name if definition else str(candidate.resource_id),
+                "resource_type": candidate.resource_type,
+            })
+
+    agent_versions: list[dict[str, Any]] = []
+    referenced_agent_version_ids: list[UUID] = []
+    rows = await session.execute(select(AgentVersionRow, AgentDefinitionRow).join(
+        AgentDefinitionRow, AgentDefinitionRow.agent_id == AgentVersionRow.agent_id).where(
+        AgentVersionRow.tenant_id == principal.tenant_id))
+    for version, agent in rows.all():
+        if any(str(value) in version_ids for value in _capability_ids(version.specification or {})):
+            referenced_agent_version_ids.append(version.agent_version_id)
+            agent_versions.append({
+                "agent_id": str(agent.agent_id), "agent_version_id": str(version.agent_version_id),
+                "display_name": agent.display_name, "version_number": version.version_number,
+            })
+
+    active_deployments: list[dict[str, Any]] = []
+    if referenced_agent_version_ids:
+        deployment_rows = await session.execute(select(DeploymentRow, DeploymentRevisionRow).join(
+            DeploymentRevisionRow, DeploymentRevisionRow.deployment_revision_id == DeploymentRow.active_revision_id).where(
+            DeploymentRow.tenant_id == principal.tenant_id,
+            DeploymentRevisionRow.agent_version_id.in_(referenced_agent_version_ids),
+        ))
+        active_deployments = [{
+            "deployment_id": str(deployment.deployment_id), "name": deployment.name,
+            "revision_number": revision.revision_number,
+        } for deployment, revision in deployment_rows.all()]
+
+    grant_target_ids = [str(resource_id), *version_ids]
+    grant_count = await session.scalar(select(func.count()).select_from(ResourceGrantRow).where(
+        ResourceGrantRow.tenant_id == principal.tenant_id,
+        ResourceGrantRow.resource_id.in_(grant_target_ids),
+    )) or 0
+    knowledge_document_count = await session.scalar(select(func.count()).select_from(KnowledgeDocumentRow).where(
+        KnowledgeDocumentRow.tenant_id == principal.tenant_id,
+        KnowledgeDocumentRow.knowledge_resource_version_id.in_(version_uuid_ids or [UUID(int=0)]),
+    )) or 0
+    deployment_ids = [UUID(item["deployment_id"]) for item in active_deployments]
+    recent_run_count = 0
+    if deployment_ids:
+        recent_run_count = await session.scalar(select(func.count()).select_from(RunRow).where(
+            RunRow.tenant_id == principal.tenant_id,
+            RunRow.deployment_id.in_(deployment_ids),
+            RunRow.created_at >= datetime.now(timezone.utc) - timedelta(days=30),
+        )) or 0
+
+    blockers = []
+    if agent_versions:
+        blockers.append("AGENT_VERSION_REFERENCES")
+    if dependent_resources:
+        blockers.append("DEPENDENT_RESOURCES")
+    if knowledge_document_count:
+        blockers.append("KNOWLEDGE_DOCUMENTS")
+    return ResourceImpact(
+        resource_id=resource_id, can_delete=not blockers, blockers=blockers,
+        agent_versions=agent_versions, dependent_resources=dependent_resources,
+        active_deployments=active_deployments, grant_count=grant_count,
+        recent_run_count=recent_run_count, knowledge_document_count=knowledge_document_count,
+    )
 
 
 def _change_summary(previous: dict[str, Any], current: dict[str, Any], catalog: dict[UUID, CatalogItem]) -> dict[str, list[str]]:
@@ -538,7 +657,7 @@ async def workbench_resources(
             candidates.append(ResourceListItem(resource_id=definition.resource_id, resource_type=definition.resource_type.value,
                 slug=definition.slug, display_name=definition.display_name, description=definition.description,
                 latest_version_number=latest.version_number if latest else None, latest_status=latest.status if latest else None,
-                published_version_count=len(versions), updated_at=definition.updated_at, **{key: metadata[key] for key in (
+                published_version_count=len(versions), updated_at=definition.updated_at, health=latest.health if latest else "UNKNOWN", **{key: metadata[key] for key in (
                     "owner_user_id", "owner_dept_id", "source_type", "lifecycle_status", "tags")}))
         for definition in await get_resource_store().list_models(principal):
             versions = versions_by_resource.get(definition.model_id, [])
@@ -552,7 +671,7 @@ async def workbench_resources(
                 slug=definition.slug, display_name=definition.display_name,
                 description=f"{definition.provider} 模型", latest_version_number=latest.version_number if latest else None,
                 latest_status=latest.status if latest else None, published_version_count=len(versions),
-                updated_at=definition.created_at,
+                updated_at=definition.created_at, health=latest.health if latest else "UNKNOWN",
                 **{key: metadata[key] for key in ("owner_user_id", "owner_dept_id", "source_type", "lifecycle_status", "tags")}))
         candidates.sort(key=lambda item: (item.resource_type, item.display_name.lower()))
         start = (page - 1) * page_size
@@ -589,7 +708,7 @@ async def workbench_resources(
                 latest_status=latest.status if latest else None,
                 published_version_count=len(versions),
                 referenced_by_count=sum(str(version.version_id) in referenced_ids for version in versions),
-                updated_at=definition.updated_at,
+                updated_at=definition.updated_at, health=latest.health if latest else "UNKNOWN",
                 **{key: metadata[key] for key in ("owner_user_id", "owner_dept_id", "source_type", "business_line", "audience", "publication_scope", "lifecycle_status", "tags")},
             ))
         for definition in models:
@@ -610,7 +729,7 @@ async def workbench_resources(
                 latest_version_number=latest.version_number if latest else None,
                 latest_status=latest.status if latest else None, published_version_count=len(versions),
                 referenced_by_count=sum(str(version.version_id) in referenced_ids for version in versions),
-                updated_at=definition.created_at,
+                updated_at=definition.created_at, health=latest.health if latest else "UNKNOWN",
                 **{key: metadata[key] for key in ("owner_user_id", "owner_dept_id", "source_type", "business_line", "audience", "publication_scope", "lifecycle_status", "tags")},
             ))
         candidates.sort(key=lambda item: (item.resource_type, item.display_name.lower()))
@@ -636,7 +755,7 @@ async def workbench_resource_detail(resource_id: UUID, principal: Principal = De
         return ResourceDetail(resource=ResourceListItem(resource_id=definition.resource_id, resource_type=definition.resource_type.value,
             slug=definition.slug, display_name=definition.display_name, description=definition.description,
             latest_version_number=latest.version_number if latest else None, latest_status=latest.status if latest else None,
-            published_version_count=len(versions), updated_at=definition.updated_at,
+            published_version_count=len(versions), updated_at=definition.updated_at, health=latest.health if latest else "UNKNOWN",
             **{key: metadata[key] for key in ("owner_user_id", "owner_dept_id", "source_type", "business_line", "audience", "publication_scope", "lifecycle_status", "tags")}), versions=versions,
             safe_config=_safe_config(definition.draft_config), source="Platform resource center",
             created_by=getattr(definition, "created_by", None), created_at=getattr(definition, "created_at", None),
@@ -682,7 +801,7 @@ async def workbench_resource_detail(resource_id: UUID, principal: Principal = De
             slug=slug, display_name=display_name, description=description,
             latest_version_number=latest.version_number if latest else None,
             latest_status=latest.status if latest else None,
-            published_version_count=len(versions), referenced_by_count=len(references), updated_at=updated_at,
+            published_version_count=len(versions), referenced_by_count=len(references), updated_at=updated_at, health=latest.health if latest else "UNKNOWN",
             **{key: metadata[key] for key in ("owner_user_id", "owner_dept_id", "source_type", "business_line", "audience", "publication_scope", "lifecycle_status", "tags")},
         )
         source = metadata["source_type"].replace("_", " ").title()
@@ -807,6 +926,23 @@ async def workbench_knowledge_overview(resource_id: UUID, principal: Principal =
         await _close_tx(session)
 
 
+@router.get("/workbench/resources/{resource_id}/impact", response_model=ResourceImpact)
+async def workbench_resource_impact(resource_id: UUID, principal: Principal = Depends(require_platform_admin_read)) -> ResourceImpact:
+    if get_settings().storage_mode != "postgres":
+        raise ApiError(409, "RESOURCE_IMPACT_UNSUPPORTED", "resource impact requires the persistent runtime")
+    session = await _tx(principal)
+    try:
+        definition = await session.get(ResourceDefinitionRow, resource_id)
+        model = None if definition is not None else await session.get(ModelDefinitionRow, resource_id)
+        if definition is None and (model is None or model.tenant_id != principal.tenant_id):
+            raise ApiError(404, "NOT_FOUND", "resource was not found")
+        if definition is not None and definition.tenant_id != principal.tenant_id:
+            raise ApiError(404, "NOT_FOUND", "resource was not found")
+        return await _resource_impact(session, principal, resource_id, is_model=model is not None)
+    finally:
+        await _close_tx(session)
+
+
 @router.delete("/workbench/resources/{resource_id}", status_code=204, response_class=Response)
 async def delete_workbench_resource(resource_id: UUID, principal: Principal = Depends(require_platform_admin)) -> Response:
     """Delete only a capability that has never been assembled into an Agent Version."""
@@ -821,6 +957,8 @@ async def delete_workbench_resource(resource_id: UUID, principal: Principal = De
         if definition is not None and definition.tenant_id != principal.tenant_id:
             raise ApiError(404, "NOT_FOUND", "resource was not found")
         is_model = model is not None
+        deleted_type = "MODEL" if is_model else definition.resource_type
+        impact = await _resource_impact(session, principal, resource_id, is_model=is_model)
         version_uuid_ids = (await session.scalars(
             select(ModelVersionRow.model_version_id).where(
                 ModelVersionRow.tenant_id == principal.tenant_id, ModelVersionRow.model_id == resource_id
@@ -829,33 +967,9 @@ async def delete_workbench_resource(resource_id: UUID, principal: Principal = De
             )
         )).all()
         version_ids = {str(item) for item in version_uuid_ids}
-        dependent_resources = []
-        all_resource_versions = await session.scalars(select(ResourceVersionRow).where(
-            ResourceVersionRow.tenant_id == principal.tenant_id))
-        for candidate in all_resource_versions.all():
-            dependencies = [str(value) for field in ("tool_version_ids", "knowledge_version_ids")
-                            for value in candidate.config.get(field, [])]
-            if candidate.config.get("connection_version_id"):
-                dependencies.append(str(candidate.config["connection_version_id"]))
-            if candidate.config.get("embedding_model_version_id"):
-                dependencies.append(str(candidate.config["embedding_model_version_id"]))
-            if any(value in version_ids for value in dependencies):
-                dependent_resources.append(str(candidate.resource_id))
-        referencing_agents = []
-        versions = await session.execute(select(AgentVersionRow, AgentDefinitionRow).join(
-            AgentDefinitionRow, AgentDefinitionRow.agent_id == AgentVersionRow.agent_id).where(
-            AgentVersionRow.tenant_id == principal.tenant_id))
-        for version, agent in versions.all():
-            if any(str(value) in version_ids for value in _capability_ids(version.specification or {})):
-                referencing_agents.append({"display_name": agent.display_name, "version_number": version.version_number})
-        document_count = await session.scalar(select(func.count()).select_from(KnowledgeDocumentRow).where(
-            KnowledgeDocumentRow.tenant_id == principal.tenant_id,
-            KnowledgeDocumentRow.knowledge_resource_version_id.in_(version_uuid_ids or [UUID(int=0)]),
-        )) or 0
-        if referencing_agents or dependent_resources or document_count:
+        if not impact.can_delete:
             raise ApiError(409, "RESOURCE_DELETE_BLOCKED", "resource is still in use and cannot be deleted", {
-                "references": referencing_agents, "dependent_resource_ids": dependent_resources,
-                "knowledge_document_count": document_count,
+                **impact.model_dump(mode="json"),
             })
         grant_target_ids = [str(resource_id), *version_ids]
         await session.execute(delete(ResourceGrantRow).where(

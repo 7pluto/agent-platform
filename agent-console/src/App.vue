@@ -6,7 +6,7 @@ import {
   api, type AgentWorkbenchItem, type CatalogItem, type ConfigurationDraft,
   type ConfigurationValidation, type ConversationMessage, type ConversationRecord,
   type DeploymentCapabilities, type IamSubject, type IngestJob, type KnowledgeDocument, type KnowledgeIndex,
-  type KnowledgeOverview, type MemoryItem, type Principal, type ResourceDetail, type ResourceListItem, type RunEvent, type RunObservabilitySummary,
+  type KnowledgeOverview, type MemoryItem, type Principal, type ResourceDetail, type ResourceImpact, type ResourceListItem, type RunEvent, type RunObservabilitySummary,
 } from './api'
 import AgentModuleBoard from './components/AgentModuleBoard.vue'
 import DiscoveryDriftPanel from './components/DiscoveryDriftPanel.vue'
@@ -40,6 +40,7 @@ const catalog = ref<CatalogItem[]>([])
 const observability = ref<RunObservabilitySummary | null>(null)
 const selectedAgent = ref<AgentWorkbenchItem | null>(null)
 const selectedResource = ref<ResourceDetail | null>(null)
+const resourceImpact = ref<ResourceImpact | null>(null)
 const selectedKnowledge = ref<KnowledgeOverview | null>(null)
 const resourceDetailTab = ref<'OVERVIEW' | 'VERSIONS' | 'GOVERNANCE' | 'TECHNICAL'>('OVERVIEW')
 const descriptorEditing = ref(false)
@@ -131,6 +132,7 @@ function typeLabel(type: string) {
 function statusLabel(status?: string) {
   return ({ PUBLISHED: '已发布', DRAFT: '草稿', ACTIVE: '运行中', AVAILABLE: '可用', UNAVAILABLE: '不可用' } as Record<string, string>)[status || ''] || status || '—'
 }
+function healthLabel(status?: string) { return ({ HEALTHY: '健康', DEGRADED: '需关注', UNHEALTHY: '异常', UNKNOWN: '未检查' } as Record<string, string>)[status || 'UNKNOWN'] || '未检查' }
 function shortTime(value?: string) { return value ? new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '暂无' }
 function traceEventLabel(event: string) {
   return ({
@@ -391,6 +393,7 @@ async function loadResources() {
 async function openResource(item: ResourceListItem, updateRoute = true) {
   selectedKnowledge.value = null
   selectedResource.value = await api.workbenchResource(item.resource_id)
+  try { resourceImpact.value = await api.workbenchResourceImpact(item.resource_id) } catch { resourceImpact.value = null }
   resourceDetailTab.value = 'OVERVIEW'
   populateDescriptorForm()
   if (updateRoute) {
@@ -401,6 +404,7 @@ async function openResource(item: ResourceListItem, updateRoute = true) {
 async function openKnowledge(item: ResourceListItem, updateRoute = true) {
   selectedResource.value = await api.workbenchResource(item.resource_id)
   selectedKnowledge.value = await api.workbenchKnowledge(item.resource_id)
+  try { resourceImpact.value = await api.workbenchResourceImpact(item.resource_id) } catch { resourceImpact.value = null }
   resourceDetailTab.value = 'OVERVIEW'
   populateDescriptorForm()
   if (updateRoute) void router.push(`/console/knowledge/${item.resource_id}`)
@@ -433,7 +437,13 @@ async function saveDescriptor() {
   finally { resourceSaving.value = false }
 }
 async function deleteResource() {
-  if (!selectedResource.value || !confirm(`确认删除资源“${selectedResource.value.resource.display_name}”？此操作仅允许删除未被引用、且没有知识文档的资源。`)) return
+  if (!selectedResource.value) return
+  if (resourceImpact.value && !resourceImpact.value.can_delete) {
+    resourceDetailTab.value = 'GOVERNANCE'
+    error.value = '该资源仍被智能体、其他资源或知识文档使用，不能物理删除。请先查看影响范围。'
+    return
+  }
+  if (!confirm(`确认删除资源“${selectedResource.value.resource.display_name}”？该资源当前无引用，删除后不可恢复。`)) return
   try {
     await api.deleteWorkbenchResource(selectedResource.value.resource.resource_id, csrf.value)
     closeDetail()
@@ -494,7 +504,7 @@ async function openAgent(item: AgentWorkbenchItem, configure = false) {
 function closeDetail() {
   const wasKnowledge = selectedResource.value?.resource.resource_type === 'KNOWLEDGE'
   const wasConnection = ['MCP_CONNECTION', 'KNOWLEDGE_CONNECTION'].includes(selectedResource.value?.resource.resource_type || '')
-  selectedResource.value = null; selectedKnowledge.value = null
+  selectedResource.value = null; selectedKnowledge.value = null; resourceImpact.value = null
   if (space.value === 'workspace') selectedAgent.value = null
   else void router.push(wasKnowledge ? consolePaths.knowledge : wasConnection ? consolePaths.connections : consolePaths.resources)
 }
@@ -1208,6 +1218,7 @@ onMounted(loadSession)
 <p>{{ item.description || item.slug }}</p>
 <div class="tag-list compact">
 <span>{{ item.source_type }}</span>
+<span>{{ healthLabel(item.health) }}</span>
 <span>V{{ item.latest_version_number || '—' }}</span>
 <span>{{ item.referenced_by_count }} 个引用</span>
 </div>
@@ -1234,7 +1245,7 @@ onMounted(loadSession)
 <button v-for="item in connectionResources" :key="item.resource_id" class="resource-card product-card" @click="openResource(item)">
 <div class="resource-card-top"><span class="type-badge">{{ item.resource_type === 'MCP_CONNECTION' ? 'MCP 连接' : 'RAGFlow 连接' }}</span><span :class="['status-pill', item.lifecycle_status === 'ARCHIVED' ? 'blocked' : 'success']">{{ item.lifecycle_status === 'ARCHIVED' ? '已归档' : '已发布' }}</span></div>
 <h3>{{ item.display_name }}</h3><p>{{ item.description || '尚未填写业务说明' }}</p>
-<div class="tag-list compact"><span>{{ item.source_type }}</span><span>V{{ item.latest_version_number || '—' }}</span><span>{{ item.referenced_by_count }} 个引用</span></div>
+<div class="tag-list compact"><span>{{ item.source_type }}</span><span>{{ healthLabel(item.health) }}</span><span>V{{ item.latest_version_number || '—' }}</span><span>{{ item.referenced_by_count }} 个引用</span></div>
 <footer><small>负责人：{{ item.owner_user_id || '历史导入' }}</small><small>{{ shortTime(item.updated_at) }}</small></footer>
 </button>
 <p v-if="resourceLoading" class="empty-copy">加载中…</p><p v-else-if="!connectionResources.length" class="empty-copy">尚未登记系统连接。</p>
@@ -1410,6 +1421,7 @@ onMounted(loadSession)
 <b>{{ selectedResource.resource.referenced_by_count }}</b> Agent 引用</span>
 <span>
 <b>{{ selectedResource.grants_count }}</b> 授权规则</span>
+<span><b>{{ healthLabel(selectedResource.resource.health) }}</b> 运行健康</span>
 </section>
 <section v-if="resourceDetailTab === 'OVERVIEW'" class="metadata-list">
 <h3>来源与说明</h3>
@@ -1545,13 +1557,19 @@ onMounted(loadSession)
 <small>{{ item.kind }} · V{{ item.version_number }}</small>
 </article>
 </section>
+<section v-if="resourceDetailTab === 'GOVERNANCE' && resourceImpact" class="impact-panel">
+<div class="impact-heading"><div><h3>变更影响</h3><p>归档或删除前必须先确认智能体、依赖资源、授权和近期运行影响。</p></div><span :class="['status-pill', resourceImpact.can_delete ? 'success' : 'blocked']">{{ resourceImpact.can_delete ? '允许删除' : '禁止物理删除' }}</span></div>
+<div class="detail-metrics"><span><b>{{ resourceImpact.agent_versions.length }}</b> Agent 版本</span><span><b>{{ resourceImpact.active_deployments.length }}</b> 活跃部署</span><span><b>{{ resourceImpact.dependent_resources.length }}</b> 依赖资源</span><span><b>{{ resourceImpact.recent_run_count }}</b> 近 30 天运行</span><span><b>{{ resourceImpact.grant_count }}</b> 授权规则</span><span><b>{{ resourceImpact.knowledge_document_count }}</b> 知识文档</span></div>
+<article v-for="item in resourceImpact.active_deployments" :key="item.deployment_id" class="reference-item"><b>{{ item.name }}</b><small>活跃 Revision {{ item.revision_number }}</small></article>
+<article v-for="item in resourceImpact.dependent_resources" :key="item.resource_id" class="reference-item"><b>{{ item.display_name }}</b><small>{{ typeLabel(item.resource_type) }} 依赖当前资源</small></article>
+</section>
 <section v-if="resourceDetailTab === 'TECHNICAL'" class="technical-summary">
 <h3>安全配置摘要</h3>
 <p>这里只展示后端脱敏后的结构，密钥、Token 与 Vault 引用不会返回前端。</p>
 <pre>{{ JSON.stringify(selectedResource.safe_config, null, 2) }}</pre>
 </section>
 <footer class="drawer-footer">
-<button class="button danger" @click="deleteResource">删除此资源</button>
+<button class="button danger" :disabled="resourceImpact ? !resourceImpact.can_delete : false" @click="deleteResource">{{ resourceImpact && !resourceImpact.can_delete ? '资源使用中，不能删除' : '删除此资源' }}</button>
 </footer>
 </div>
 </aside>

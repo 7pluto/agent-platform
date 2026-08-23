@@ -8,7 +8,7 @@
 
 | 范围 | 执行方式 | 结果 | 证据 |
 |---|---|---|---|
-| 后端全量单元与集成测试 | `py -3 -m pytest -q` | 85 passed | pytest 终端结果；仅有 Windows pytest cache 目录权限告警 |
+| 后端全量单元与集成测试 | `py -3 -m pytest -q` | 86 passed | pytest 终端结果；仅有 Windows pytest cache 目录权限告警 |
 | Python 语法与模块编译 | `py -3.12 -m compileall -q app tests migrations` | 通过 | 无编译错误 |
 | Console TypeScript | `npx vue-tsc --noEmit` | 通过 | 无类型错误 |
 | Console 生产构建 | `npm run build` | 通过 | Vite 生成 `dist`，JS/CSS bundle 正常 |
@@ -204,6 +204,22 @@
 
 状态：路由、类型检查与生产构建通过；浏览器刷新验收待部署后执行。
 
+### LIFECYCLE-001：统一健康状态
+
+步骤：分别查看可用/不可用 Model、有/无活跃索引的 Local Knowledge、未检查的 Dify/MCP/RAGFlow 和已记录异常的外部 Provider。
+
+预期：API 与卡片只使用 `HEALTHY / DEGRADED / UNHEALTHY / UNKNOWN`；前端显示“健康 / 需关注 / 异常 / 未检查”；“已发布”和“健康”分别展示，不能把配置完成误认为上游健康。
+
+状态：映射自动化通过。证据：`tests/test_resource_health.py`。
+
+### LIFECYCLE-002：删除前影响分析
+
+步骤：依次对未使用资源、被 Skill 依赖资源、被历史 Agent Version 引用资源、被活跃 Revision 引用资源、含知识文档资源调用影响接口并尝试删除。
+
+预期：详情“权限与引用”显示 Agent Version、活跃 Deployment、依赖资源、近 30 天 Run、Grant 和知识文档数量；有 Agent/资源/文档引用时 `can_delete=false`，按钮禁用，DELETE 再次返回 `RESOURCE_DELETE_BLOCKED`；无引用资源允许删除并记录审计。
+
+状态：接口与 UI 已实现；PostgreSQL 组合数据验收待部署后执行。
+
 ## 6. 最终业务验收矩阵
 
 ### VALIDATE-001：外部 Knowledge 不要求本地索引
@@ -259,7 +275,7 @@
 | BIZ-007 | Agent 组装与发布 | Model/Prompt/Skill/Tool/Knowledge/Memory、发布校验、Revision 回滚 | 待 Iteration O/P |
 | BIZ-008 | RuoYi 权限矩阵 | Deployment VIEW/RUN 与 Resource USE 分离，用户/角色/部门生效 | 运行时矩阵自动化通过；待真实账号矩阵 |
 | BIZ-009 | Run Trace | 可读 Timeline、权限裁剪、工具/RAG/Memory 实际调用、原始事件可展开 | 策略与前端构建通过；待真实组合 Run |
-| BIZ-010 | 生命周期与影响分析 | 使用中禁止物理删除、归档/弃用、Health/Drift/Impact | 待 Iteration S |
+| BIZ-010 | 生命周期与影响分析 | 使用中禁止物理删除、归档/弃用、Health/Drift/Impact | Health/Impact 已实现；待真实数据与低频检查 |
 
 ## 7. 安全与中文显示通用断言
 

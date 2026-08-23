@@ -236,7 +236,7 @@ export interface ResourceListItem {
   resource_id: string; resource_type: string; slug: string; display_name: string; description?: string
   latest_version_number?: number; latest_status?: string; published_version_count: number
   referenced_by_count: number; updated_at?: string; owner_user_id?: string; owner_dept_id?: string
-  source_type: string; lifecycle_status: string; tags: string[]
+  source_type: string; lifecycle_status: string; health: 'HEALTHY' | 'DEGRADED' | 'UNHEALTHY' | 'UNKNOWN' | string; tags: string[]
 }
 export interface ResourceListPage { items: ResourceListItem[]; meta: PageMeta }
 export interface ResourceDetail {
@@ -250,6 +250,13 @@ export interface ResourceDetail {
     dependencies: Array<{ version_id: string; display_name: string; resource_type: string; version_number?: number }>
   }>
   effective_permissions: Array<{ origin: string; effect: string; subject_id?: string; actions: string[] }>
+}
+export interface ResourceImpact {
+  resource_id: string; can_delete: boolean; blockers: string[]
+  agent_versions: Array<{ agent_id: string; agent_version_id: string; display_name: string; version_number: number }>
+  dependent_resources: Array<{ resource_id: string; display_name: string; resource_type: string }>
+  active_deployments: Array<{ deployment_id: string; name: string; revision_number: number }>
+  grant_count: number; recent_run_count: number; knowledge_document_count: number
 }
 export interface DiscoverySnapshot {
   snapshot_id: string
@@ -580,6 +587,7 @@ export const api = {
   listRevisions: (deploymentId: string) => request<DeploymentRevision[]>(`/api/v1/deployments/${deploymentId}/revisions`),
   workbenchResources: (query = '', resourceType = '', status = '') => request<ResourceListPage>(`/api/v1/workbench/resources?${new URLSearchParams(Object.fromEntries(Object.entries({ query, resource_type: resourceType, status, page_size: '100' }).filter(([, value]) => value))).toString()}`),
   workbenchResource: (resourceId: string) => request<ResourceDetail>(`/api/v1/workbench/resources/${resourceId}`),
+  workbenchResourceImpact: (resourceId: string) => request<ResourceImpact>(`/api/v1/workbench/resources/${resourceId}/impact`),
   updateResourceDescriptor: (resourceId: string, payload: { owner_user_id: string; owner_dept_id?: string; source_type: string; source_ref?: string; usage_guidance?: string; one_line_summary: string; when_to_use: string; when_not_to_use?: string; input_summary: string; output_summary: string; risk_level: string; read_only: boolean; tags: string[]; lifecycle_status: string; business_line?: string; data_involved?: string; audience?: string; usage_scenarios?: string; developer_user_ids?: string[]; publication_scope?: 'PERSONAL' | 'OWNER_DEPT' | 'SELECTED_SUBJECTS' }, csrf: string) => request<ResourceDetail>(`/api/v1/resources/${resourceId}/descriptor`, { method: 'PATCH', headers: { 'X-CSRF-Token': csrf }, body: JSON.stringify(payload) }),
   deleteWorkbenchResource: (resourceId: string, csrf: string) => request<void>(`/api/v1/workbench/resources/${resourceId}`, { method: 'DELETE', headers: { 'X-CSRF-Token': csrf } }),
   workbenchKnowledge: (resourceId: string) => request<KnowledgeOverview>(`/api/v1/workbench/knowledge/${resourceId}`),
