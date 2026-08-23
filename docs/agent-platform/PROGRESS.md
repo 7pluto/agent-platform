@@ -13,7 +13,9 @@ Stage 4 foundation: resource registry, Agent Assembly V2, worker deployment and 
 - Chat Run Trace now renders a Chinese business timeline with duration, actual Tool calls, RAG hits and Memory count. Raw sanitized event JSON is opt-in and the final answer remains below Trace.
 - Added a fixed cross-provider permission matrix proving that denied Dify, MCP Tool/Connection and RAGFlow Knowledge names, schemas, Version IDs and external IDs never enter the model Tool Registry, while authorized Dify, MCP, HTTP and local/remote Knowledge remain available.
 - Resource cards now use the fixed `HEALTHY / DEGRADED / UNHEALTHY / UNKNOWN` vocabulary without conflating publication and health. Resource Detail loads a server-calculated impact report covering Agent versions, active Deployments, dependent resources, Grants, recent Runs and Knowledge documents; blocked resources cannot be physically deleted. This also fixes the persistent delete audit resource-type bug.
-- Verification: backend full suite `86 passed`; Console `vue-tsc --noEmit` and production Vite build pass; frontend source scan found no replacement-character or common mojibake patterns. No deployment or GitHub push was performed for this batch.
+- Remote HTTP Knowledge now has a complete product command and Console flow: fixed endpoint/path, GET/POST, request fields, immutable static business parameters, response mapping, optional one-time Vault credential, real pre-publication retrieval test, semantic descriptor and RuoYi publication scope. The safe response returns identifiers and test counts only, never config or `secret_ref`.
+- Knowledge Center now provides Provider filters for platform-managed, RAGFlow and external API Knowledge, plus a direct “Add Knowledge” entry. Provider-specific operations remain hidden when unsupported.
+- Verification: backend full suite `87 passed`; Console `vue-tsc --noEmit` and production Vite build pass; frontend source scan found no replacement-character or common mojibake patterns. No deployment or GitHub push was performed for this batch.
 
 ## Completed
 

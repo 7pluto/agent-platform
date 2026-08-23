@@ -8,7 +8,7 @@
 
 | 范围 | 执行方式 | 结果 | 证据 |
 |---|---|---|---|
-| 后端全量单元与集成测试 | `py -3 -m pytest -q` | 86 passed | pytest 终端结果；仅有 Windows pytest cache 目录权限告警 |
+| 后端全量单元与集成测试 | `py -3 -m pytest -q` | 87 passed | pytest 终端结果；仅有 Windows pytest cache 目录权限告警 |
 | Python 语法与模块编译 | `py -3.12 -m compileall -q app tests migrations` | 通过 | 无编译错误 |
 | Console TypeScript | `npx vue-tsc --noEmit` | 通过 | 无类型错误 |
 | Console 生产构建 | `npm run build` | 通过 | Vite 生成 `dist`，JS/CSS bundle 正常 |
@@ -262,6 +262,28 @@
 
 状态：待真实 Provider 组合测试。
 
+### KNOWLEDGE-REMOTE-001：企业知识 API 接入并发布
+
+前置条件：准备一个只允许固定 Host/Path 的企业检索接口，返回结构化列表；若需要认证，准备一次性 API Key。
+
+步骤：
+
+1. 在“知识库 → 添加知识库”选择“企业知识检索 API”。
+2. 填写固定 Endpoint、检索 Path、GET/POST、超时；填写问题字段与数量字段。
+3. 在固定请求参数中设置业务系统要求的 `knowledge_id`，配置列表路径、正文、标题、分数和元数据字段。
+4. 输入一条真实业务测试问题，配置 RuoYi 可用范围，确认发布。
+5. 在知识库详情执行检索测试，再将其加入 Agent 并运行。
+
+预期：
+
+- 模型只看到 `query/top_k`，不能修改 Endpoint、Path、`knowledge_id`、认证或字段映射。
+- 后端在发布前执行真实检索，失败只保留不可用 Draft，不进入 Agent Builder。
+- API Key 只提交一次并写入 Vault；发布响应、详情、Trace 和审计不返回 Key 或 `secret_ref`。
+- 返回结果统一为 Knowledge Hit，Agent Runtime 不包含 Remote HTTP 专属分支。
+- 未获得此 Knowledge `USE` 的用户在模型 Tool Registry 中看不到名称、参数或固定 `knowledge_id`。
+
+状态：产品发布命令自动化通过。证据：`tests/test_knowledge_providers.py::test_remote_http_knowledge_product_publish_tests_before_exposure`。真实外部接口与 Agent 组合运行待部署后执行。
+
 以下案例是 V1.5 完成门槛，后续迭代继续在本文档补充步骤与证据：
 
 | 编号 | 业务链路 | 核心验收点 | 当前状态 |
@@ -271,7 +293,7 @@
 | BIZ-003 | 受控 HTTP 工单 API→测试→发布→Agent 调用 | 固定目标与映射、无任意代理、返回截断与脱敏 | 待全链验收 |
 | BIZ-004 | 本地 PDF/DOCX→后端上传→解析→索引→检索 | tenant/KB/index/document ACL、引用 chunk 可追溯 | 待全链验收 |
 | BIZ-005 | RAGFlow 连接→发现 3 个 Dataset→分别发布 Knowledge | 一个 Dataset 一个 Resource、分别授权、模型不可见 Dataset ID | 待真实 RAGFlow 环境 |
-| BIZ-006 | Remote HTTP Knowledge→Mapping→检索→Agent 使用 | 仅暴露 query/top_k、固定 knowledge ID、响应规范化 | 待全链验收 |
+| BIZ-006 | Remote HTTP Knowledge→Mapping→检索→Agent 使用 | 仅暴露 query/top_k、固定 knowledge ID、响应规范化 | 接入/测试/发布自动化通过；待真实 API Run |
 | BIZ-007 | Agent 组装与发布 | Model/Prompt/Skill/Tool/Knowledge/Memory、发布校验、Revision 回滚 | 待 Iteration O/P |
 | BIZ-008 | RuoYi 权限矩阵 | Deployment VIEW/RUN 与 Resource USE 分离，用户/角色/部门生效 | 运行时矩阵自动化通过；待真实账号矩阵 |
 | BIZ-009 | Run Trace | 可读 Timeline、权限裁剪、工具/RAG/Memory 实际调用、原始事件可展开 | 策略与前端构建通过；待真实组合 Run |

@@ -449,6 +449,13 @@ export const api = {
   registerRagflowKnowledge: (payload: { connection_version_id: string; dataset_id: string; slug: string; display_name: string; description?: string }, csrf: string) => request<RegistryResourceVersion>('/api/v1/ragflow-knowledge/register', {
     method: 'POST', headers: { 'X-CSRF-Token': csrf }, body: JSON.stringify(payload),
   }),
+  createRemoteHttpKnowledge: (payload: {
+    slug: string; display_name: string; description: string; endpoint: string; search_path: string; method: 'GET' | 'POST'; timeout_seconds: number
+    api_key?: string; auth_header: string; auth_scheme: string; query_field: string; top_k_field: string; static_body: Record<string, unknown>
+    items_path: string; id_field: string; content_field: string; title_field: string; score_field?: string; metadata_field: string; test_query: string; test_top_k: number
+  }, csrf: string) => request<{ resource_id: string; resource_version_id: string; version_number: number; status: string; test_result: { provider: string; hit_count: number } }>('/api/v1/remote-http-knowledge', {
+    method: 'POST', headers: { 'X-CSRF-Token': csrf }, body: JSON.stringify(payload),
+  }),
   createHttpTool: (payload: {
     slug: string; display_name: string; description: string; tool_name: string; endpoint: string; path: string; method: 'GET' | 'POST'
     input_schema: Record<string, unknown>; query_template?: Record<string, unknown> | unknown[]; body_template?: Record<string, unknown> | unknown[]

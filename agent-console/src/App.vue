@@ -80,7 +80,11 @@ const resourceForm = ref({
   embeddingModelVersionId: '', ttlDays: 30, maxItems: 50, categories: 'preference',
   modelBaseUrl: 'https://api.siliconflow.cn/v1', modelName: '', modelApiKey: '', modelMode: 'CHAT',
   mcpEndpoint: '', mcpApiKey: '', mcpTimeout: 10,
-  ragflowEndpoint: '', ragflowApiKey: '', ragflowTimeout: 20, knowledgeSource: 'LOCAL' as 'LOCAL' | 'RAGFLOW', ragflowConnectionVersionId: '', ragflowDatasetId: '',
+  ragflowEndpoint: '', ragflowApiKey: '', ragflowTimeout: 20, knowledgeSource: 'LOCAL' as 'LOCAL' | 'RAGFLOW' | 'REMOTE_HTTP', ragflowConnectionVersionId: '', ragflowDatasetId: '',
+  remoteKnowledgeEndpoint: '', remoteKnowledgePath: '/search', remoteKnowledgeMethod: 'POST' as 'GET' | 'POST', remoteKnowledgeTimeout: 15,
+  remoteKnowledgeApiKey: '', remoteKnowledgeQueryField: 'query', remoteKnowledgeTopKField: 'top_k', remoteKnowledgeStaticBody: '{}',
+  remoteKnowledgeItemsPath: 'items', remoteKnowledgeIdField: 'id', remoteKnowledgeContentField: 'content', remoteKnowledgeTitleField: 'title',
+  remoteKnowledgeScoreField: 'score', remoteKnowledgeMetadataField: 'metadata', remoteKnowledgeTestQuery: '员工考勤管理办法',
   httpEndpoint: '', httpPath: '/', httpMethod: 'GET' as 'GET' | 'POST', httpToolName: '', httpApiKey: '', httpTimeout: 15,
   httpInputSchema: '{"type":"object","properties":{}}', httpQueryTemplate: '{}', httpBodyTemplate: '', httpTestArguments: '{}',
   difyBaseUrl: '', difyApiKey: '', difyFlowType: 'CHATFLOW', difyToolName: '', difyTimeout: 90,
@@ -90,6 +94,10 @@ const resourceForm = ref({
   skillToolVersionIds: [] as string[], skillKnowledgeVersionIds: [] as string[],
 })
 const knowledgeQuery = ref('')
+const knowledgeProviderFilter = ref<'ALL' | 'LOCAL' | 'RAGFLOW' | 'REMOTE_HTTP'>('ALL')
+const knowledgeProviderOptions = [
+  { v: 'ALL', n: '全部' }, { v: 'LOCAL', n: '平台托管' }, { v: 'RAGFLOW', n: 'RAGFlow' }, { v: 'REMOTE_HTTP', n: '外部 API' },
+] as const
 const selectedKnowledgeVersionId = ref('')
 const knowledgeDocuments = ref<KnowledgeDocument[]>([])
 const knowledgeIndexes = ref<KnowledgeIndex[]>([])
@@ -257,6 +265,13 @@ async function openConnectionWizard() {
   await router.push(consolePaths.resources)
   await openResourceWizard()
   selectResourceCategory('CONNECTOR')
+}
+async function openKnowledgeWizard() {
+  consoleView.value = 'resources'
+  await router.push(consolePaths.resources)
+  await openResourceWizard()
+  selectResourceCategory('CAPABILITY')
+  resourceForm.value.type = 'KNOWLEDGE'
 }
 async function discoverRagflowDatasets() {
   const connectionVersionId = resourceForm.value.ragflowConnectionVersionId
@@ -557,12 +572,24 @@ function validateHttpTool() {
   if (test && (Array.isArray(test) || typeof test !== 'object')) return '测试参数必须是对象。'
   return ''
 }
+function validateRemoteKnowledge() {
+  const form = resourceForm.value
+  if (!form.remoteKnowledgeEndpoint.trim()) return '外部知识 API 需要固定 Endpoint。'
+  if (!form.remoteKnowledgePath.startsWith('/')) return '检索路径必须以 / 开头。'
+  if (!form.remoteKnowledgeQueryField.trim() || !form.remoteKnowledgeTopKField.trim()) return '请填写问题和数量字段名。'
+  if (!form.remoteKnowledgeItemsPath.trim() || !form.remoteKnowledgeContentField.trim()) return '请填写结果列表路径和正文字段。'
+  if (!form.remoteKnowledgeTestQuery.trim()) return '发布前必须提供一条真实检索测试问题。'
+  const staticBody = parseJsonValue(form.remoteKnowledgeStaticBody, '固定请求参数', {})
+  if (!staticBody || Array.isArray(staticBody) || typeof staticBody !== 'object') return '固定请求参数必须是 JSON 对象。'
+  return ''
+}
 async function createTypedResource() {
   const form = resourceForm.value
   const semanticsError = validateResourceSemantics()
   if (semanticsError) { error.value = semanticsError; return }
   if (form.type === 'KNOWLEDGE' && form.knowledgeSource === 'LOCAL' && !form.embeddingModelVersionId) { error.value = '平台文件知识库必须选择 Embedding 模型版本。'; return }
   if (form.type === 'KNOWLEDGE' && form.knowledgeSource === 'RAGFLOW' && (!form.ragflowConnectionVersionId || !form.ragflowDatasetId)) { error.value = '请选择 RAGFlow 连接并发现、选择数据集。'; return }
+  if (form.type === 'KNOWLEDGE' && form.knowledgeSource === 'REMOTE_HTTP') { const message = validateRemoteKnowledge(); if (message) { error.value = message; return } }
   resourceSaving.value = true; error.value = ''
   try {
     const slug = (form.slug.trim() || slugify(form.displayName)).toLowerCase()
@@ -593,6 +620,22 @@ async function createTypedResource() {
       const knowledge = await api.registerRagflowKnowledge({ connection_version_id: form.ragflowConnectionVersionId, dataset_id: form.ragflowDatasetId, slug, display_name: form.displayName.trim(), description: form.description.trim() || undefined }, csrf.value)
       await saveNewResourceDescriptor(knowledge.resource_id, 'RAGFLOW')
       await publishResourceAudience('KNOWLEDGE', knowledge.resource_version_id)
+      resourceComposerOpen.value = false; await Promise.all([loadResources(), loadCatalog()]); return
+    }
+    if (form.type === 'KNOWLEDGE' && form.knowledgeSource === 'REMOTE_HTTP') {
+      const result = await api.createRemoteHttpKnowledge({
+        slug, display_name: form.displayName.trim(), description: form.description.trim() || form.oneLineSummary.trim(),
+        endpoint: form.remoteKnowledgeEndpoint.trim(), search_path: form.remoteKnowledgePath.trim(), method: form.remoteKnowledgeMethod,
+        timeout_seconds: form.remoteKnowledgeTimeout, ...(form.remoteKnowledgeApiKey ? { api_key: form.remoteKnowledgeApiKey } : {}),
+        auth_header: 'Authorization', auth_scheme: 'Bearer', query_field: form.remoteKnowledgeQueryField.trim(), top_k_field: form.remoteKnowledgeTopKField.trim(),
+        static_body: parseJsonValue(form.remoteKnowledgeStaticBody, '固定请求参数', {}) as Record<string, unknown>, items_path: form.remoteKnowledgeItemsPath.trim(),
+        id_field: form.remoteKnowledgeIdField.trim() || 'id', content_field: form.remoteKnowledgeContentField.trim(), title_field: form.remoteKnowledgeTitleField.trim() || 'title',
+        ...(form.remoteKnowledgeScoreField.trim() ? { score_field: form.remoteKnowledgeScoreField.trim() } : {}), metadata_field: form.remoteKnowledgeMetadataField.trim() || 'metadata',
+        test_query: form.remoteKnowledgeTestQuery.trim(), test_top_k: 3,
+      }, csrf.value)
+      form.remoteKnowledgeApiKey = ''
+      await saveNewResourceDescriptor(result.resource_id, 'REMOTE_HTTP')
+      await publishResourceAudience('KNOWLEDGE', result.resource_version_id)
       resourceComposerOpen.value = false; await Promise.all([loadResources(), loadCatalog()]); return
     }
     if (form.type === 'TOOL' && form.toolMode === 'HTTP') {
@@ -654,6 +697,9 @@ const connectionResources = computed(() => resources.value.filter(item =>
   ['MCP_CONNECTION', 'KNOWLEDGE_CONNECTION'].includes(item.resource_type)))
 const knowledgeResources = computed(() => resources.value.filter(item =>
   item.resource_type === 'KNOWLEDGE'
+  && (knowledgeProviderFilter.value === 'ALL'
+    || (knowledgeProviderFilter.value === 'LOCAL' && !['RAGFLOW', 'REMOTE_HTTP'].includes(item.source_type))
+    || item.source_type === knowledgeProviderFilter.value)
   && (!knowledgeQuery.value || `${item.display_name} ${item.description || ''} ${item.slug}`.toLowerCase().includes(knowledgeQuery.value.toLowerCase()))))
 
 async function openKnowledgeOperations(item: ResourceListItem) {
@@ -1154,7 +1200,7 @@ onMounted(loadSession)
 <label class="wide-field">RAGFlow API Key<input v-model="resourceForm.ragflowApiKey" type="password" autocomplete="new-password" placeholder="仅本次提交，后端保存至 Vault" /></label>
 </template>
 <template v-else-if="resourceForm.type === 'KNOWLEDGE'">
-<label>知识来源<select v-model="resourceForm.knowledgeSource" @change="ragflowDatasets = []; resourceForm.ragflowDatasetId = ''"><option value="LOCAL">平台文件知识库（PDF / DOCX）</option><option value="RAGFLOW">RAGFlow 外部数据集</option></select></label>
+<label>知识来源<select v-model="resourceForm.knowledgeSource" @change="ragflowDatasets = []; resourceForm.ragflowDatasetId = ''"><option value="LOCAL">平台文件知识库（PDF / DOCX）</option><option value="RAGFLOW">RAGFlow 外部数据集</option><option value="REMOTE_HTTP">企业知识检索 API</option></select></label>
 <template v-if="resourceForm.knowledgeSource === 'LOCAL'">
 <label>Embedding 模型版本<select v-model="resourceForm.embeddingModelVersionId">
 <option value="">请选择已发布 Embedding 模型</option>
@@ -1162,10 +1208,23 @@ onMounted(loadSession)
 </select>
 </label>
 </template>
-<template v-else>
+<template v-else-if="resourceForm.knowledgeSource === 'RAGFLOW'">
 <label>RAGFlow 连接<select v-model="resourceForm.ragflowConnectionVersionId" @change="ragflowDatasets = []; resourceForm.ragflowDatasetId = ''"><option value="">请选择已发布连接</option><option v-for="item in catalogFor('KNOWLEDGE_CONNECTION')" :key="item.version_id" :value="item.version_id">{{ optionLabel(item) }}</option></select></label>
 <label class="button-field"><span>数据集发现</span><button class="button ghost" type="button" :disabled="ragflowDiscovering || !resourceForm.ragflowConnectionVersionId" @click="discoverRagflowDatasets">{{ ragflowDiscovering ? '发现中…' : '发现数据集' }}</button></label>
 <label class="wide-field">RAGFlow 数据集<select v-model="resourceForm.ragflowDatasetId" :disabled="!ragflowDatasets.length"><option value="">{{ ragflowDatasets.length ? '请选择数据集' : '请先发现数据集' }}</option><option v-for="item in ragflowDatasets" :key="item.id" :value="item.id">{{ item.name }}{{ item.description ? ` · ${item.description}` : '' }}</option></select><small class="field-hint">数据集标识只保存在不可变资源版本中，不会发送到模型上下文。</small></label>
+</template>
+<template v-else>
+<div class="dify-section-title wide-field"><b>固定企业知识 API</b><span>模型只会看到 query 和 top_k；Endpoint、固定参数和字段映射保存在不可变资源版本中。</span></div>
+<label class="wide-field">API Endpoint<input v-model="resourceForm.remoteKnowledgeEndpoint" placeholder="https://knowledge.example.com" /></label>
+<label>检索路径<input v-model="resourceForm.remoteKnowledgePath" placeholder="/search" /></label><label>请求方法<select v-model="resourceForm.remoteKnowledgeMethod"><option value="POST">POST</option><option value="GET">GET</option></select></label>
+<label>超时（秒）<input v-model.number="resourceForm.remoteKnowledgeTimeout" type="number" min="1" max="60" /></label><label>API Key（可选）<input v-model="resourceForm.remoteKnowledgeApiKey" type="password" autocomplete="new-password" placeholder="仅提交一次，后端 Vault 保存" /></label>
+<label>问题字段<input v-model="resourceForm.remoteKnowledgeQueryField" placeholder="query" /></label><label>数量字段<input v-model="resourceForm.remoteKnowledgeTopKField" placeholder="top_k" /></label>
+<label class="wide-field">固定请求参数 JSON<textarea v-model="resourceForm.remoteKnowledgeStaticBody" rows="3" placeholder='{"knowledge_id":"hr-policy"}' /><small class="field-hint">适合固定 knowledge_id、业务域等参数；这些字段不会交给模型修改。</small></label>
+<div class="dify-section-title wide-field"><b>响应字段映射</b><span>将已有系统返回结果归一化为平台 Knowledge Hit。</span></div>
+<label>结果列表路径<input v-model="resourceForm.remoteKnowledgeItemsPath" placeholder="data.items" /></label><label>正文字段<input v-model="resourceForm.remoteKnowledgeContentField" placeholder="content" /></label>
+<label>ID 字段<input v-model="resourceForm.remoteKnowledgeIdField" placeholder="id" /></label><label>标题字段<input v-model="resourceForm.remoteKnowledgeTitleField" placeholder="title" /></label>
+<label>相似度字段<input v-model="resourceForm.remoteKnowledgeScoreField" placeholder="score（可留空）" /></label><label>元数据字段<input v-model="resourceForm.remoteKnowledgeMetadataField" placeholder="metadata" /></label>
+<label class="wide-field">发布前测试问题<input v-model="resourceForm.remoteKnowledgeTestQuery" placeholder="例如：员工考勤管理办法" /><small class="field-hint">必须真实检索成功后才会发布；失败只保留不可用 Draft，不进入 Agent Builder。</small></label>
 </template>
 </template>
 <template v-else-if="resourceForm.type === 'MEMORY_POLICY'">
@@ -1254,17 +1313,18 @@ onMounted(loadSession)
 
       <section v-else-if="space === 'console' && consoleView === 'knowledge'" class="page-content knowledge-operations">
 <div class="page-heading">
-<div><p class="eyebrow">KNOWLEDGE OPERATIONS</p><h1>知识库运营</h1><p>管理文档、Ingest 任务、索引版本和检索效果，文件经 API 上传到 MinIO。</p></div>
-<button class="button ghost" :disabled="knowledgeBusy" @click="refreshKnowledgeOperations">刷新当前知识库</button>
+<div><p class="eyebrow">KNOWLEDGE CENTER</p><h1>知识库</h1><p>统一管理平台文件、RAGFlow 数据集和企业知识 API，并按 Provider 展示对应运营能力。</p></div>
+<div class="row-actions"><button class="button ghost" :disabled="knowledgeBusy" @click="refreshKnowledgeOperations">刷新当前知识库</button><button class="button primary" @click="openKnowledgeWizard">＋ 添加知识库</button></div>
 </div>
 <div class="knowledge-layout">
 <aside class="knowledge-sidebar product-card">
 <input v-model="knowledgeQuery" placeholder="搜索知识库" />
+<div class="knowledge-provider-tabs"><button v-for="item in knowledgeProviderOptions" :key="item.v" :class="{ active: knowledgeProviderFilter === item.v }" @click="knowledgeProviderFilter = item.v">{{ item.n }}</button></div>
 <button v-for="item in knowledgeResources" :key="item.resource_id" :class="{ active: selectedKnowledge?.resource_id === item.resource_id }" @click="openKnowledgeOperations(item)">
 <span><b>{{ item.display_name }}</b><small>{{ item.description || item.slug }}</small></span>
 <em>V{{ item.latest_version_number || '—' }}</em>
 </button>
-<p v-if="!knowledgeResources.length" class="empty-copy">尚无知识库，请先在资源中心创建。</p>
+<p v-if="!knowledgeResources.length" class="empty-copy">当前筛选下没有知识库，可直接点击“添加知识库”。</p>
 </aside>
 <section v-if="selectedKnowledge" class="knowledge-workspace">
 <article class="product-card knowledge-summary">

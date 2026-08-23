@@ -6,6 +6,9 @@ from app.knowledge.providers.local import LocalKnowledgeProvider
 from app.knowledge.providers.remote_http import RemoteHttpKnowledgeProvider
 from app.knowledge.providers.ragflow import RagflowKnowledgeProvider
 from app.knowledge.providers.registry import knowledge_provider_registry
+from app.knowledge.providers.base import KnowledgeHit, KnowledgeSearchResult
+from app.main import app
+from fastapi.testclient import TestClient
 
 
 def _principal() -> Principal:
@@ -47,3 +50,32 @@ def test_ragflow_provider_discovers_and_searches_a_fixed_dataset() -> None:
         assert result.hits[0].metadata["dataset_id"] == "dataset-hr"
 
     asyncio.run(scenario())
+
+
+def test_remote_http_knowledge_product_publish_tests_before_exposure(monkeypatch) -> None:
+    class FakeRemoteProvider:
+        async def search(self, **kwargs):
+            assert kwargs["config"]["request_mapping"]["static_body"] == {"knowledge_id": "hr"}
+            assert kwargs["query"] == "员工考勤管理办法"
+            return KnowledgeSearchResult(provider="REMOTE_HTTP", hits=[KnowledgeHit(id="hit-1", content="考勤制度内容", score=0.92)])
+
+    monkeypatch.setattr(knowledge_provider_registry, "resolve", lambda config, principal: FakeRemoteProvider())
+    with TestClient(app, base_url="https://testserver") as client:
+        session = client.post("/api/v1/auth/exchange", json={"ticket_code": "dev-ticket"}).json()
+        response = client.post("/api/v1/remote-http-knowledge", headers={"X-CSRF-Token": session["csrf_token"]}, json={
+            "slug": "remote-http-hr-policy",
+            "display_name": "企业人事知识 API",
+            "description": "固定查询企业人事知识系统",
+            "endpoint": "https://knowledge.example.com",
+            "search_path": "/v1/search",
+            "method": "POST",
+            "static_body": {"knowledge_id": "hr"},
+            "items_path": "data.items",
+            "content_field": "text",
+            "test_query": "员工考勤管理办法",
+        })
+        assert response.status_code == 201, response.text
+        payload = response.json()
+        assert payload["status"] == "PUBLISHED"
+        assert payload["test_result"] == {"provider": "REMOTE_HTTP", "hit_count": 1}
+        assert "secret_ref" not in response.text
