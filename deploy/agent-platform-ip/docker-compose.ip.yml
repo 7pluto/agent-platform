@@ -3,5 +3,6 @@
 services:
   agent-server:
     environment:
+      AGENT_APP_ENV: dev
       AGENT_SESSION_COOKIE_NAME: ap_session
       AGENT_SESSION_COOKIE_SECURE: "false"
