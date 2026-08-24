@@ -52,22 +52,23 @@ def _model_response(payload: dict[str, Any]) -> dict[str, Any]:
         for item in tools
         if isinstance(item, dict) and isinstance(item.get("function"), dict)
     ]
+    knowledge_tools = [name for name, _ in tool_specs if "knowledge_search" in name.lower()]
 
     selected = None
     arguments: dict[str, Any] = {}
+    if "本地" in question and knowledge_tools:
+        selected, arguments = knowledge_tools[0], {"query": question, "top_k": 5}
+    elif "RAGFlow" in question and len(knowledge_tools) >= 2:
+        selected, arguments = knowledge_tools[1], {"query": question, "top_k": 5}
+    elif "企业知识 API" in question and len(knowledge_tools) >= 3:
+        selected, arguments = knowledge_tools[2], {"query": question, "top_k": 5}
+
     for name, description in tool_specs:
+        if selected:
+            break
         lowered = name.lower()
         if "客户" in question and ("customer" in lowered or "crm" in lowered):
             selected, arguments = name, {"customer_id": "C-1001"}
-            break
-        if "本地" in question and "knowledge_search" in lowered and "本地" in description:
-            selected, arguments = name, {"query": question, "top_k": 5}
-            break
-        if "RAGFlow" in question and "knowledge_search" in lowered and "RAGFlow" in description:
-            selected, arguments = name, {"query": question, "top_k": 5}
-            break
-        if "企业知识 API" in question and "knowledge_search" in lowered and ("知识 API" in description or "远程" in description):
-            selected, arguments = name, {"query": question, "top_k": 5}
             break
         if "考勤" in question and not any(marker in question for marker in ("本地", "RAGFlow", "企业知识 API")) and "knowledge_search" in lowered:
             selected, arguments = name, {"query": question, "top_k": 5}
