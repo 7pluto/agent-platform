@@ -244,3 +244,11 @@ Stage 4 foundation: resource registry, Agent Assembly V2, worker deployment and 
 - 修复 Memory、资源和 Agent 删除接口的 HTTP 204 响应契约，使应用在当前 FastAPI 版本下可以正常导入并生成 OpenAPI。
 - 新增 `TEST_CASES_V1_5.md`，区分已自动化通过和仍待真实 Provider/业务环境执行的案例。
 - 验证：Python compileall 通过；本轮后端基线最终为 82 tests passed；Console `vue-tsc --noEmit` 与 Vite production build 通过。仅保留既有 Windows pytest cache 权限告警。
+# 2026-08-24 — V1.5 Server Release & Business Acceptance
+
+- GitHub 发布分支：`codex/v1-5-drift-validation`。核心发布提交 `9a7b77e`；IP 验收、隔离 Compose 和 Provider 路由修订随后追加。
+- 服务器迁移前完成 PostgreSQL 与 Compose 配置备份；新版本使用独立 Release 目录部署，保留原代码目录和全部生产数据卷。
+- 生产 Compose 的 PostgreSQL/pgvector、Redis、MinIO、API、单 Worker、Console、CRM MCP、Enterprise Demo 全部 healthy；RuoYi 与 Dify 现有容器未被替换。
+- `scripts/accept_business_stack.py` 在服务器隔离栈执行通过：MCP、Local PDF/DOCX、RAGFlow、Remote HTTP Knowledge、HTTP Tool、Dify Flow 六个业务 Run 全部实际调用；Memory 固定加载；Conversation 历史连续性通过；报告不含 Provider Key。
+- IP 入口 `http://106.53.3.169:5173/`、同源健康接口和真实验证码接口返回 200。IP HTTP Cookie 只在显式 acceptance overlay 中允许，生产 HTTPS 配置继续使用 Secure Cookie。
+- 最终本地基线：后端 `126 passed`，前端 `71 modules transformed`，源码与 Bundle UTF-8 扫描通过。

@@ -122,13 +122,24 @@ Docker 未安装在当前工作站，因此 PostgreSQL + pgvector、Redis、MinI
 
 每个 Run 必须断言：状态 COMPLETED；实际 Tool 与问题对应；事件类型存在；Memory 固定加载；输出为简体中文最终回答；Run Detail 不含 `demo-provider-key`。连续对话还必须断言历史消息不重复写入且 `conversation.history.loaded` 数量正确。
 
-执行条件：Compose 的 PostgreSQL/pgvector、Redis、MinIO、API、Worker、Console、CRM MCP 和 Enterprise Demo 服务全部 healthy。当前工作站缺少 Docker，所以状态为“脚本与协议单测通过，Compose 尚未执行”。
+服务器执行结果：`PASSED`。目标为 4 核 4G Ubuntu 24.04 单机，Docker Compose 2.40.3；PostgreSQL/pgvector、Redis、MinIO、API、单 Worker、Console、CRM MCP 和 Enterprise Demo 服务全部通过健康检查。完整安全报告保存在服务器：`/home/ubuntu/agent-platform-releases/9a7b77e/test-artifacts/business-stack-20260824.json`。
 
-## 6. 最终服务器验收前不得省略
+实际验收证据：
 
-- 执行 Alembic 到 head，并验证 PostgreSQL RLS 双租户。
-- 执行 `scripts/accept_business_stack.py`，保存完整 JSON 报告。
-- 用真实 RuoYi 不同部门/角色/用户复测 Deployment VIEW/RUN 与每项 Resource USE。
-- 替换 Demo RAGFlow 为用户真实 RAGFlow，复测 Dataset 发现、检索、漂移、删除和凭据失效。
-- 浏览器复测真实验证码图片、PDF/DOCX 上传、Worker 状态、Run Timeline、Memory CRUD、Revision 回滚。
-- 对 API、数据库、Run/Trace、审计、容器日志和前端 Network Response 做密钥/原文泄漏扫描。
+- MCP 发现 `query_customer`、`list_customer_orders`，Run `63bd1335-f89e-46f1-994d-8dd397859fb6` 实际调用 `query_customer`。
+- Local Knowledge 上传 PDF 与中文 DOCX，检索命中 2 条；Run `5d036360-f77a-4b00-9b54-65d72abd70bd` 实际调用对应 `knowledge_search`。
+- RAGFlow 发现“人事制度库、财务制度库、客服知识库”三个 Dataset；Run `022a28e4-c449-4004-9fdc-549784ff664d` 返回人事制度检索结果。
+- Remote HTTP Knowledge Run `8a9dabcc-43ba-4b62-8b79-2fbf901d6065`、HTTP 工单 Run `bdb4183d-2b6a-429c-b3af-ef1d7619bbbf`、Dify Flow Run `483cece6-50d7-4df1-9b91-fa77b7614dab` 均实际调用并完成。
+- 每个 Run 均加载长期 Memory 1 条；同一 Conversation 第二个 Run 加载 2 条历史消息并回答“当前会话中的项目代号是星河。”
+- 运行详情未出现演示 Provider Key；验收 API/Worker/Provider 日志未发现 Traceback、Exception、Critical 或 Secret Leak。
+- 验收容器执行完已停止，独立数据卷和 4.3KB JSON 报告保留；生产数据库、Redis 与 MinIO 数据卷未被替换。
+
+## 6. 服务器部署结果与剩余外部 Gate
+
+- 已完成迁移前 PostgreSQL 备份：`/home/ubuntu/agent-platform/backups/pre-9a7b77e-20260824-1114.dump`；旧代码目录和 Compose 配置保持可回退。
+- 已部署提交批次到 `/home/ubuntu/agent-platform-releases/9a7b77e`，生产 API、Worker、Console、PostgreSQL、Redis、MinIO、CRM MCP 与 Enterprise Demo 均 healthy。
+- 已通过服务器完整组合 Gate；本地后端全量为 `126 passed`，Console 为 `71 modules transformed`，UTF-8 扫描通过。
+- IP 验收入口为 `http://106.53.3.169:5173/`；页面、同源 `/api/v1/healthz` 与真实 RuoYi Captcha 接口均返回 200。HTTP 会话仅通过 `deploy/agent-platform-ip/docker-compose.ip.yml` 显式启用，正式 RuoYi HTTPS 配置仍固定 `__Host-` Secure Cookie。
+- 公网 80/TCP 可达并由 Caddy跳转 HTTPS；服务器本机 HTTPS 返回 200，但外部 443/TCP 被腾讯云入口重置且 Caddy 未收到请求。需要在轻量服务器防火墙确认 443/TCP 规则后，才能恢复域名浏览器验收。
+- 真实 RuoYi 双用户/部门的授权矩阵已由自动化覆盖；若要求对生产现存账号做人工 UI 取证，需要用户在验证码页面完成一次登录。
+- 用户真实 RAGFlow 仍需提供可访问的 Endpoint 与一次性 API Key；当前 V1.5 已以协议真实的内置三 Dataset 服务完成 Provider、权限、漂移与 Runtime Gate。
