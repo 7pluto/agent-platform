@@ -1,0 +1,18 @@
+# Isolated, server-local acceptance stack. Use with a distinct Compose project
+# name so production databases, object storage and sessions are never touched.
+services:
+  postgres:
+    ports: !reset []
+
+  redis:
+    ports: !reset []
+
+  minio:
+    ports: !reset []
+
+  agent-server:
+    ports: !override
+      - "127.0.0.1:18000:8000"
+
+  agent-console:
+    ports: !reset []
