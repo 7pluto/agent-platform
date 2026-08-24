@@ -11,6 +11,9 @@ services:
     ports: !reset []
 
   agent-server:
+    environment:
+      AGENT_SESSION_COOKIE_NAME: ap_acceptance_session
+      AGENT_SESSION_COOKIE_SECURE: "false"
     ports: !override
       - "127.0.0.1:18000:8000"
 
