@@ -1,0 +1,7 @@
+# Temporary acceptance overlay for direct HTTP access by public IP.
+# Do not use this overlay after the HTTPS domain entry is available.
+services:
+  agent-server:
+    environment:
+      AGENT_SESSION_COOKIE_NAME: ap_session
+      AGENT_SESSION_COOKIE_SECURE: "false"
