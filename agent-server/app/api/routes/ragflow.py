@@ -11,13 +11,16 @@ from app.core.errors import ApiError
 from app.iam.models import Principal
 from app.knowledge.providers.ragflow import RagflowKnowledgeProvider
 from app.resources.registry_factory import get_resource_registry
-from app.resources.registry_models import ResourceDefinitionCreate, ResourceType, ResourceVersionCreate, ResourceVersionRecord
+from app.resources.registry_models import ResourceDefinitionCreate, ResourceType, ResourceValidationStatus, ResourceValidationType, ResourceVersionCreate, ResourceVersionRecord
 from app.resources.registry_store import ResourceRegistryStore
 from app.resources.discovery import get_resource_discovery_service
+from app.resources.validation import get_resource_validation_service
+from app.resources.product_governance import ProductGovernance, apply_product_governance, resolve_publication_subjects
 from app.secrets.vault import get_secret_vault
 
 router = APIRouter(tags=["ragflow"])
 discovery_snapshots = get_resource_discovery_service()
+validation_runs = get_resource_validation_service()
 
 class RagflowConnectionCreate(BaseModel):
     slug: str = Field(pattern=r"^[a-z][a-z0-9-]{2,63}$")
@@ -26,7 +29,7 @@ class RagflowConnectionCreate(BaseModel):
     api_key: str
     timeout_seconds: float = Field(default=20, ge=0.1, le=60)
 
-class RagflowDatasetRegister(BaseModel):
+class RagflowDatasetRegister(ProductGovernance):
     connection_version_id: UUID
     dataset_id: str
     slug: str = Field(pattern=r"^[a-z][a-z0-9-]{2,63}$")
@@ -44,6 +47,14 @@ async def create_ragflow_connection(request: RagflowConnectionCreate, principal:
     registry = get_resource_registry()
     definition = await registry.create_definition(ResourceDefinitionCreate(resource_type=ResourceType.KNOWLEDGE_CONNECTION, slug=request.slug, display_name=request.display_name, draft_config=config), principal)
     version = await registry.create_version(definition.resource_id, ResourceVersionCreate(config=config), principal)
+    try:
+        datasets = await RagflowKnowledgeProvider(principal).discover_datasets(config)
+    except Exception as exc:
+        code = exc.code if isinstance(exc, ApiError) else "RAGFLOW_CONNECTION_FAILED"
+        message = exc.message if isinstance(exc, ApiError) else type(exc).__name__
+        await validation_runs.record(version.resource_version_id, ResourceValidationType.VALIDATE, ResourceValidationStatus.FAILED, {"provider": "RAGFLOW", "code": code, "message": message}, principal)
+        raise
+    await validation_runs.record(version.resource_version_id, ResourceValidationType.VALIDATE, ResourceValidationStatus.SUCCEEDED, {"provider": "RAGFLOW", "dataset_count": len(datasets)}, principal)
     return await registry.publish_version(version.resource_version_id, principal)
 
 @router.post("/ragflow-connections/{resource_version_id}/discover")
@@ -55,6 +66,7 @@ async def discover_ragflow_datasets(resource_version_id: UUID, principal: Princi
 
 @router.post("/ragflow-knowledge/register", response_model=ResourceVersionRecord, status_code=201)
 async def register_ragflow_knowledge(request: RagflowDatasetRegister, principal: Principal = Depends(require_platform_admin)) -> ResourceVersionRecord:
+    resolve_publication_subjects(request)
     registry = get_resource_registry()
     connection = await registry.get_version(request.connection_version_id, principal, published=True)
     if connection.resource_type != ResourceType.KNOWLEDGE_CONNECTION:
@@ -74,4 +86,26 @@ async def register_ragflow_knowledge(request: RagflowDatasetRegister, principal:
     version = await registry.create_version(definition.resource_id, ResourceVersionCreate(config=config), principal)
     published = await registry.publish_version(version.resource_version_id, principal)
     await discovery_snapshots.capture_published(published, principal)
+    grants = await apply_product_governance(
+        product=request,
+        resource_type=ResourceType.KNOWLEDGE.value,
+        resource_id=published.resource_id,
+        resource_version_id=published.resource_version_id,
+        source_type="RAGFLOW",
+        source_ref=request.dataset_id,
+        principal=principal,
+    )
+    from app.governance.store_factory import get_governance_store
+    await get_governance_store().record_audit(
+        principal,
+        "ragflow_knowledge.publish",
+        ResourceType.KNOWLEDGE.value,
+        str(published.resource_version_id),
+        {
+            "connection_version_id": str(request.connection_version_id),
+            "external_dataset_id": request.dataset_id,
+            "publication_scope": request.publication_scope,
+            "grant_count": len(grants),
+        },
+    )
     return published

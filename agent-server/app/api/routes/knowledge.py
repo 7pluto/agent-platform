@@ -17,6 +17,7 @@ from app.resources.registry_models import ResourceDefinitionCreate, ResourceVers
 from app.resources.registry_factory import get_resource_registry
 from app.resources.registry_store import ResourceRegistryStore
 from app.resources.validation import get_resource_validation_service
+from app.resources.product_governance import ProductGovernance, apply_product_governance, resolve_publication_subjects
 from app.knowledge.service import get_knowledge_file_service
 from app.knowledge.jobs import ingest_jobs
 from app.secrets.vault import get_secret_vault
@@ -66,7 +67,7 @@ class KnowledgeRetrievalHit(BaseModel):
     source: str | None = None
 
 
-class RemoteHttpKnowledgeCreate(BaseModel):
+class RemoteHttpKnowledgeCreate(ProductGovernance):
     slug: str = Field(pattern=r"^[a-z][a-z0-9-]{2,63}$")
     display_name: str = Field(min_length=1, max_length=128)
     description: str = Field(default="调用受控企业知识检索 API", max_length=4_000)
@@ -162,6 +163,7 @@ async def create_remote_http_knowledge(
     principal: Principal = Depends(require_platform_admin),
 ) -> RemoteHttpKnowledgePublishResponse:
     """Register one fixed enterprise Knowledge API and prove retrieval before publication."""
+    resolve_publication_subjects(request)
     host = urlsplit(request.endpoint).hostname
     if not host:
         from app.core.errors import ApiError
@@ -220,9 +222,18 @@ async def create_remote_http_knowledge(
         test_result, principal, round((perf_counter() - started) * 1000),
     )
     published = await registry.publish_version(version.resource_version_id, principal)
+    grants = await apply_product_governance(
+        product=request,
+        resource_type=ResourceType.KNOWLEDGE.value,
+        resource_id=published.resource_id,
+        resource_version_id=published.resource_version_id,
+        source_type="REMOTE_HTTP",
+        source_ref=f"{request.method} {request.search_path}",
+        principal=principal,
+    )
     await get_governance_store().record_audit(
         principal, "remote_knowledge.publish", ResourceType.KNOWLEDGE.value,
-        str(published.resource_version_id), {"resource_id": str(published.resource_id), "provider": "REMOTE_HTTP", "hit_count": len(result.hits)},
+        str(published.resource_version_id), {"resource_id": str(published.resource_id), "provider": "REMOTE_HTTP", "hit_count": len(result.hits), "publication_scope": request.publication_scope, "grant_count": len(grants)},
     )
     return RemoteHttpKnowledgePublishResponse(
         resource_id=published.resource_id, resource_version_id=published.resource_version_id,

@@ -29,20 +29,25 @@ class ModelWithSecretCreate(BaseModel):
 
 @router.post("/models/with-secret", response_model=ModelVersionRecord, status_code=201)
 async def create_model_with_secret(request: ModelWithSecretCreate, principal: Principal = Depends(require_platform_admin)) -> ModelVersionRecord:
-    if request.model_mode == "CHAT":
-        candidate = OpenAICompatibleModel(request.base_url.rstrip("/"), request.model, request.api_key)
-        await candidate.test_connection()
-    else:
-        from app.resources.openai_compatible import OpenAICompatibleEmbedder
-        candidate = OpenAICompatibleEmbedder(request.base_url.rstrip("/"), request.model, request.api_key)
-        await candidate.embed(["embedding connection test"])
     secret = await get_secret_vault().create(f"Model: {request.display_name}", request.api_key, principal)
     config = {"base_url": request.base_url.rstrip("/"), "model": request.model, "model_mode": request.model_mode, "secret_ref": secret.secret_ref}
     definition = await store.create_model(ModelDefinitionCreate(slug=request.slug, display_name=request.display_name, config=config), principal)
     version = await store.create_model_version(definition.model_id, ModelVersionCreate(config=config), principal)
+    try:
+        if request.model_mode == "CHAT":
+            candidate = OpenAICompatibleModel(request.base_url.rstrip("/"), request.model, request.api_key)
+            await candidate.test_connection()
+        else:
+            from app.resources.openai_compatible import OpenAICompatibleEmbedder
+            candidate = OpenAICompatibleEmbedder(request.base_url.rstrip("/"), request.model, request.api_key)
+            await candidate.embed(["embedding connection test"])
+    except ApiError as exc:
+        await store.record_connection_test(version.model_version_id, principal, False, exc.code)
+        await get_governance_store().record_audit(principal, "model.validation_failed", "MODEL_VERSION", str(version.model_version_id), {"model_id": str(definition.model_id), "code": exc.code, "fingerprint": secret.fingerprint})
+        raise
     await store.record_connection_test(version.model_version_id, principal, True, "connection successful")
     published = await store.publish_model_version(version.model_version_id, principal)
-    await get_governance_store().record_audit(principal, "model.publish_with_vault_secret", "MODEL_VERSION", str(published.model_version_id), {"model_id": str(published.model_id), "secret_ref": secret.secret_ref, "fingerprint": secret.fingerprint})
+    await get_governance_store().record_audit(principal, "model.publish_with_vault_secret", "MODEL_VERSION", str(published.model_version_id), {"model_id": str(published.model_id), "fingerprint": secret.fingerprint})
     return published
 
 

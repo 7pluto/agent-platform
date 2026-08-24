@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from app.api.dependencies import require_platform_admin, require_platform_admin_read
 from app.governance.models import AuditEventRecord, ResourceGrantCreate, ResourceGrantRecord
@@ -41,6 +43,31 @@ async def list_resource_grants(
     principal: Principal = Depends(require_platform_admin_read),
 ) -> list[ResourceGrantRecord]:
     return await store.list_grants(principal, resource_type, resource_id)
+
+
+@router.delete("/resource-grants/{grant_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
+async def delete_resource_grant(
+    grant_id: UUID,
+    principal: Principal = Depends(require_platform_admin),
+) -> Response:
+    record = await store.delete_grant(grant_id, principal)
+    if record is None:
+        raise HTTPException(status_code=404, detail={"code": "RESOURCE_GRANT_NOT_FOUND", "message": "resource grant not found"})
+    await store.record_audit(
+        principal,
+        "resource_grant.delete",
+        "RESOURCE_GRANT",
+        str(grant_id),
+        {
+            "subject_type": record.subject_type.value,
+            "subject_id": record.subject_id,
+            "resource_type": record.resource_type,
+            "resource_id": record.resource_id,
+            "actions": sorted(record.actions),
+            "effect": record.effect.value,
+        },
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/audit-events", response_model=list[AuditEventRecord])

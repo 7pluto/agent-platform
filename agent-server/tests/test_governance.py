@@ -90,3 +90,35 @@ def test_resource_grant_actions_are_fixed() -> None:
             resource_id="tool-a",
             actions={"DELETE_EVERYTHING"},
         )
+
+
+def test_resource_grant_can_be_revoked_without_cross_tenant_access() -> None:
+    async def run() -> None:
+        store = GovernanceStore()
+        admin = _principal("admin", ["agent_admin"])
+        other_tenant = Principal(
+            provider="mock",
+            external_user_id="other-admin",
+            external_org_id="org-other",
+            tenant_id="tenant-other",
+            display_name="other-admin",
+        )
+        member = _principal("member", ["viewer"])
+        grant = await store.create_grant(
+            ResourceGrantCreate(
+                subject_type=SubjectType.ROLE,
+                subject_id="viewer",
+                resource_type="TOOL",
+                resource_id="tool-a",
+                actions={"USE"},
+            ),
+            admin,
+        )
+        assert await store.is_allowed(member, "USE", "TOOL", "tool-a")
+        assert await store.delete_grant(grant.grant_id, other_tenant) is None
+        assert await store.is_allowed(member, "USE", "TOOL", "tool-a")
+        deleted = await store.delete_grant(grant.grant_id, admin)
+        assert deleted is not None
+        assert not await store.is_allowed(member, "USE", "TOOL", "tool-a")
+
+    asyncio.run(run())

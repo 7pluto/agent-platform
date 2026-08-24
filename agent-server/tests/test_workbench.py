@@ -8,14 +8,24 @@ def _session(client: TestClient) -> dict[str, str]:
     return {"X-CSRF-Token": response.json()["csrf_token"]}
 
 
-def _deployment(client: TestClient, headers: dict[str, str], suffix: str = "one") -> str:
+def _deployment(client: TestClient, headers: dict[str, str], suffix: str = "one", deployment_display: str | None = None) -> str:
     agent = client.post("/api/v1/agents", json={"slug": f"workbench-agent-{suffix}", "display_name": "Workbench Agent"}, headers=headers).json()
     version = client.post(f"/api/v1/agents/{agent['agent_id']}/versions", json={}, headers=headers).json()
     client.post(f"/api/v1/agent-versions/{version['agent_version_id']}/publish", headers=headers)
-    deployment = client.post("/api/v1/deployments", json={"agent_id": agent["agent_id"], "name": f"workbench-deployment-{suffix}"}, headers=headers).json()
+    deployment = client.post("/api/v1/deployments", json={"agent_id": agent["agent_id"], "name": f"workbench-deployment-{suffix}", "description": deployment_display}, headers=headers).json()
     revision = client.post(f"/api/v1/deployments/{deployment['deployment_id']}/revisions", json={"agent_version_id": version["agent_version_id"]}, headers=headers).json()
     client.post(f"/api/v1/deployments/{deployment['deployment_id']}/revisions/{revision['deployment_revision_id']}/activate", headers=headers)
     return deployment["deployment_id"]
+
+
+def test_workbench_uses_business_deployment_name_instead_of_technical_slug() -> None:
+    with TestClient(app, base_url="https://testserver") as client:
+        headers = _session(client)
+        deployment_id = _deployment(client, headers, "readable", "长沙客服助手-开发")
+        listing = client.get("/api/v1/workbench/agents", headers=headers)
+        assert listing.status_code == 200
+        item = next(row for row in listing.json()["items"] if row["deployment_id"] == deployment_id)
+        assert item["deployment_name"] == "长沙客服助手-开发"
 
 
 def test_deployment_conversation_and_run_message_are_idempotent() -> None:

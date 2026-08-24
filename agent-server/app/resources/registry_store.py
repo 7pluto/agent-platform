@@ -260,8 +260,8 @@ class ResourceRegistryStore:
         allowed = {host.strip().lower().rstrip(".") for host in allowlist}
         if parsed.hostname.lower().rstrip(".") not in allowed:
             raise ApiError(422, "HTTP_TOOL_EGRESS_FORBIDDEN", "HTTP Tool endpoint hostname is not allowed")
-        if config.get("method", "GET") not in {"GET", "POST"}:
-            raise ApiError(422, "INVALID_HTTP_TOOL_CONFIG", "HTTP Tool method must be GET or POST")
+        if config.get("method", "GET") not in {"GET", "POST", "PUT", "PATCH"}:
+            raise ApiError(422, "INVALID_HTTP_TOOL_CONFIG", "HTTP Tool method must be GET, POST, PUT, or PATCH")
         path = config.get("path", "/")
         if not isinstance(path, str) or not path.startswith("/") or ".." in path or "://" in path or "?" in path or "#" in path:
             raise ApiError(422, "INVALID_HTTP_TOOL_CONFIG", "HTTP Tool path must be a fixed absolute path")
@@ -274,6 +274,24 @@ class ResourceRegistryStore:
         for field in ("query_template", "body_template"):
             if field in config and not isinstance(config[field], (dict, list)):
                 raise ApiError(422, "INVALID_HTTP_TOOL_CONFIG", f"{field} must be an object or array template")
+        header_template = config.get("header_template", {})
+        if not isinstance(header_template, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in header_template.items()):
+            raise ApiError(422, "INVALID_HTTP_TOOL_CONFIG", "header_template must be a string-to-string object")
+        forbidden_headers = {
+            "authorization", "proxy-authorization", "host", "cookie", "set-cookie", "connection",
+            "transfer-encoding", "content-length", "x-forwarded-for", "x-forwarded-host",
+            "x-forwarded-proto", "x-real-ip",
+        }
+        if {key.strip().lower() for key in header_template}.intersection(forbidden_headers):
+            raise ApiError(422, "HTTP_TOOL_HEADER_FORBIDDEN", "security-sensitive headers cannot be configured as templates")
+        response_mapping = config.get("response_mapping", {})
+        if not isinstance(response_mapping, dict):
+            raise ApiError(422, "INVALID_HTTP_TOOL_CONFIG", "response_mapping must be an object")
+        if response_mapping.get("body_path") is not None and not isinstance(response_mapping["body_path"], str):
+            raise ApiError(422, "INVALID_HTTP_TOOL_CONFIG", "response_mapping.body_path must be a string")
+        fields = response_mapping.get("fields", {})
+        if not isinstance(fields, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in fields.items()):
+            raise ApiError(422, "INVALID_HTTP_TOOL_CONFIG", "response_mapping.fields must be a string-to-string object")
         secret_ref = config.get("secret_ref")
         if secret_ref is not None:
             if not isinstance(secret_ref, str):

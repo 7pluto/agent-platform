@@ -8,10 +8,11 @@
 
 | 范围 | 执行方式 | 结果 | 证据 |
 |---|---|---|---|
-| 后端全量单元与集成测试 | `py -3 -m pytest -q` | 87 passed | pytest 终端结果；仅有 Windows pytest cache 目录权限告警 |
+| 后端全量单元与集成测试 | `py -3.12 -m pytest -q` | 115 passed | pytest 终端结果；仅有 Windows pytest cache 目录权限告警 |
 | Python 语法与模块编译 | `py -3.12 -m compileall -q app tests migrations` | 通过 | 无编译错误 |
 | Console TypeScript | `npx vue-tsc --noEmit` | 通过 | 无类型错误 |
-| Console 生产构建 | `npm run build` | 通过 | Vite 生成 `dist`，JS/CSS bundle 正常 |
+| Console 生产构建 | `npm run build` | 通过 | `index-BA4-FwaZ.js`、`index-BKWgUofE.css` |
+| Console UTF-8 源码与产物 | `scripts/check_frontend_utf8.py agent-console/src agent-console/index.html agent-console/dist` | 通过 | 严格 UTF-8 解码且无常见 mojibake 标记 |
 
 ## 2. 权限裁剪业务矩阵
 
@@ -186,7 +187,7 @@
 
 预期：只有一套三栏式 Builder；支持名称/用途搜索、Provider 和风险筛选、卡片添加/移除及快速详情；能力选择器不存在 `<select multiple>` 或高级 JSON；右侧持续显示当前组装和预检阻断项；MCP Connection 不作为新配置的直接能力出现。
 
-状态：源码结构检查、Vue 类型检查和生产构建通过；浏览器交互验收待部署后执行。
+状态：源码结构检查、Vue 类型检查和生产构建通过；本地生产 Bundle 浏览器验收已确认三栏 Builder、卡片选择器、中文 Deployment 显示和稳定编辑 URL。真实资源组合仍随全栈 Compose 验收执行。
 
 ### UI-002：能力、连接与知识分区
 
@@ -194,7 +195,7 @@
 
 预期：能力中心只展示 Model、Prompt、Skill、Tool、Memory Policy；系统连接只展示 MCP/RAGFlow Connection；知识库运营只展示 Knowledge。卡片主标题为业务名称，UUID、hash、raw config 不作为默认内容。
 
-状态：Vue 类型检查与生产构建通过。
+状态：Vue 类型检查、生产构建和浏览器逐页导航通过；各入口分别到达 `/console/capabilities`、`/console/connections`、`/console/knowledge`，主标题和空状态均为正常简体中文。
 
 ### UI-003：独立资源详情
 
@@ -202,7 +203,23 @@
 
 预期：详情拥有稳定 URL；以“概览、版本与依赖、权限与引用、技术摘要”分区；默认不平铺原始配置；返回列表和浏览器前进后退正常。
 
-状态：路由、类型检查与生产构建通过；浏览器刷新验收待部署后执行。
+状态：路由、类型检查与生产构建通过；浏览器已验证 `/console/governance` 直接刷新后仍停留在权限页且会话有效。带真实资源 ID 的详情刷新待 Compose 数据验收。
+
+### UI-004：运行治理与权限审计不是占位页
+
+步骤：访问 `/console/runs` 与 `/console/governance`；检查筛选、摘要、详情空状态、新增授权表单、RuoYi 主体和审计 Tab；创建一条 Deployment 部门授权。
+
+预期：运行治理展示 Run 状态、实际工具调用、RAG、权限拒绝与 Manifest 入口；权限页按业务名称选择对象，Deployment 默认动作只有 VIEW/RUN，资源动作使用 VIEW/USE/EDIT/PUBLISH/MANAGE；保存后卡片显示部门业务名称而不是 UUID。
+
+状态：浏览器通过。使用“浏览器验收智能体”和 `Demo Department` 创建 VIEW/RUN 后显示 1 条授权；撤销接口、租户隔离和删除审计由 `tests/test_api_security.py::test_admin_can_revoke_grant_and_revoke_is_audited` 与 `tests/test_governance.py::test_resource_grant_can_be_revoked_without_cross_tenant_access` 通过。
+
+### UI-005：中文智能体与部署名称
+
+步骤：在新增智能体弹窗输入“浏览器验收智能体”和“浏览器验收-开发”，创建并进入配置。
+
+预期：中文作为业务名称完整保留；技术 Slug/Deployment name 自动生成，不要求用户输入 ASCII 标识；列表和 Builder 均显示中文部署名称。
+
+状态：浏览器通过；编辑 URL 为 `/console/agents/{deployment_id}/edit`。后端业务显示断言：`tests/test_workbench.py::test_workbench_uses_business_deployment_name_instead_of_technical_slug`。
 
 ### LIFECYCLE-001：统一健康状态
 
@@ -288,16 +305,56 @@
 
 | 编号 | 业务链路 | 核心验收点 | 当前状态 |
 |---|---|---|---|
-| BIZ-001 | Dify 连接→发现→测试→发布→Agent 调用 | 参数自动发现、凭据 Vault、Resource USE 裁剪、真实回答 | 待全链验收 |
-| BIZ-002 | CRM MCP 连接→发现 Tool→批量注册→Agent 调用 | 单 Tool 独立授权、未授权 Tool 不进入模型 Tool Registry | 待全链验收 |
-| BIZ-003 | 受控 HTTP 工单 API→测试→发布→Agent 调用 | 固定目标与映射、无任意代理、返回截断与脱敏 | 待全链验收 |
-| BIZ-004 | 本地 PDF/DOCX→后端上传→解析→索引→检索 | tenant/KB/index/document ACL、引用 chunk 可追溯 | 待全链验收 |
-| BIZ-005 | RAGFlow 连接→发现 3 个 Dataset→分别发布 Knowledge | 一个 Dataset 一个 Resource、分别授权、模型不可见 Dataset ID | 待真实 RAGFlow 环境 |
-| BIZ-006 | Remote HTTP Knowledge→Mapping→检索→Agent 使用 | 仅暴露 query/top_k、固定 knowledge ID、响应规范化 | 接入/测试/发布自动化通过；待真实 API Run |
-| BIZ-007 | Agent 组装与发布 | Model/Prompt/Skill/Tool/Knowledge/Memory、发布校验、Revision 回滚 | 待 Iteration O/P |
-| BIZ-008 | RuoYi 权限矩阵 | Deployment VIEW/RUN 与 Resource USE 分离，用户/角色/部门生效 | 运行时矩阵自动化通过；待真实账号矩阵 |
-| BIZ-009 | Run Trace | 可读 Timeline、权限裁剪、工具/RAG/Memory 实际调用、原始事件可展开 | 策略与前端构建通过；待真实组合 Run |
+| BIZ-001 | Dify 连接→发现→测试→发布→Agent 调用 | 参数自动发现、凭据 Vault、Resource USE 裁剪、真实回答 | 协议/Runtime 自动化通过；Compose 全链脚本已固化待执行 |
+| BIZ-002 | CRM MCP 连接→发现 Tool→批量注册→Agent 调用 | 单 Tool 独立授权、未授权 Tool 不进入模型 Tool Registry | 两 Tool 发现/适配/Runtime 自动化通过；Compose 全链脚本已固化待执行 |
+| BIZ-003 | 受控 HTTP 工单 API→测试→发布→Agent 调用 | 固定目标与映射、无任意代理、返回截断与脱敏 | 产品/Runtime 自动化通过；Compose 全链脚本已固化待执行 |
+| BIZ-004 | 本地 PDF/DOCX→后端上传→解析→索引→检索 | tenant/KB/index/document ACL、引用 chunk 可追溯 | 文件签名、PDF/DOCX 解析及中文 chunk 自动化通过；Compose Ingest 全链脚本已固化待执行 |
+| BIZ-005 | RAGFlow 连接→发现 3 个 Dataset→分别发布 Knowledge | 一个 Dataset 一个 Resource、分别授权、模型不可见 Dataset ID | 三 Dataset 协议、注册、检索与 Provider 定向选择自动化通过；真实外部 RAGFlow 待最终环境 |
+| BIZ-006 | Remote HTTP Knowledge→Mapping→检索→Agent 使用 | 仅暴露 query/top_k、固定 knowledge ID、响应规范化 | 产品/适配/Runtime 自动化通过；Compose 全链脚本已固化待执行 |
+| BIZ-007 | Agent 组装与发布 | Model/Prompt/Skill/Tool/Knowledge/Memory、发布校验、Revision 回滚 | Builder/发布校验/回滚自动化通过；Compose 组合发布待执行 |
+| BIZ-008 | RuoYi 权限矩阵 | Deployment VIEW/RUN 与 Resource USE 分离，用户/角色/部门生效 | 同一 Agent 双用户、MCP 连接级与单工具级矩阵自动化通过；待真实账号矩阵 |
+| BIZ-009 | Run Trace | 可读 Timeline、权限裁剪、工具/RAG/Memory 实际调用、原始事件可展开 | 策略、业务 Runtime 与前端生产构建通过；待 Compose 真实组合 Run |
 | BIZ-010 | 生命周期与影响分析 | 使用中禁止物理删除、归档/弃用、Health/Drift/Impact | Health/Impact 已实现；待真实数据与低频检查 |
+| BIZ-011 | 会话与长期记忆 | 同一 Thread 自动加载历史，Memory 跨会话固定加载且仅显式写入 | Runtime/前端/业务脚本已固化；待 Compose Worker 闭环 |
+| BIZ-012 | Secret 轮换与停用 | 稳定引用、Key 不回显、停用后发布和运行阻断 | API、安全回归与 Console 治理界面通过；待 PostgreSQL/Vault 容器复验 |
+
+### PERMISSION-USER-MATRIX-001：同一智能体按用户裁剪不同能力
+
+固定同一个 Agent，挂载通用 Dify、财务 Dify、CRM MCP Connection、财务 MCP Connection、CRM 查询、CRM 敏感备注、财务账户查询、受控 HTTP 工单、本地 Knowledge、财务 RAGFlow 和外部 API Knowledge。
+
+权限分配：
+
+- 长沙用户：通用 Dify、工单、CRM Connection、CRM 查询、本地 Knowledge、外部 API Knowledge。
+- 财务用户：财务 Dify、工单、财务 Connection、财务账户查询、本地 Knowledge、财务 RAGFlow。
+- 长沙用户额外获得“财务账户查询 Tool”的 `USE`，但没有财务 MCP Connection 的 `USE`，用于验证连接是额外权限边界。
+- CRM 敏感备注与 CRM 查询共用已授权连接，但长沙用户只获得 CRM 查询 Tool 的 `USE`，用于验证单个 MCP Tool 可独立授权。
+
+预期：
+
+- 两个用户都可凭 Deployment VIEW/RUN 看到并运行同一个 Agent。
+- 两人的模型 Tool Registry 只包含各自被授权且依赖连接也被授权的能力。
+- 被过滤能力的业务名称、Tool Name、Schema、外部 ID、Dataset ID 和 Version ID 均不进入模型上下文。
+- 某项能力无权限不阻断 Agent 启动，也不影响其他已授权能力。
+
+状态：自动化通过。证据：`tests/test_permission_matrix.py::test_same_agent_exposes_only_each_ruoyi_users_authorized_capabilities`。
+
+### CONVERSATION-MEMORY-001：会话历史与长期 Memory 分离
+
+步骤：
+
+1. 为当前 Deployment 显式保存长期记忆“所有回答使用简体中文，并优先给出结论”。
+2. 在会话 A 发送“项目代号是星河”，再追问“项目代号是什么”。
+3. 新建会话 B，提出相同追问。
+4. 删除长期 Memory 后再运行一次。
+
+预期：
+
+- 会话 A 第二个 Run 的 `conversation.history.loaded count=2`，回答包含“星河”；当前 Run 的 USER 消息不会重复进入历史。
+- 会话 B 不继承会话 A 的“星河”，但仍固定加载当前用户在此 Deployment 下的长期 Memory。
+- 删除 Memory 后 `memory.read count=0`；旧会话消息仍按 Thread 保留。
+- 消息“保存为记忆”携带 `source_run_id`，网络重试不产生重复 Memory。
+
+状态：Runtime 与 Demo 模型自动化通过，Console 新建/切换/重命名会话和 Memory 新增/消息保存/删除已通过类型检查与生产构建；Compose 业务脚本已加入两轮历史与 Memory 断言，待容器执行。
 
 ## 7. 安全与中文显示通用断言
 
@@ -305,3 +362,5 @@
 - 所有租户资源、快照、Grant、Run、Memory、文档与索引必须同时经过应用鉴权和 PostgreSQL RLS。
 - Console 源文件、HTML 和 API 均使用 UTF-8；构建产物页面必须显示简体中文，不允许出现 `????` 或 mojibake。
 - 浏览器验证码必须使用后端返回的 `data:image/...;base64` URL；验证码加载失败不得退回 `dev-ticket`。
+
+详细执行环境、浏览器证据、完整组合脚本数据和剩余 Gate 见 `TEST_EXECUTION_REPORT_2026-08-24.md`。

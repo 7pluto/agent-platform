@@ -72,3 +72,45 @@ def test_http_tool_provider_probe_returns_safe_configuration_status() -> None:
         assert result.details == {"endpoint_host": "api.example.com"}
 
     asyncio.run(run())
+
+
+def test_http_tool_supports_safe_patch_path_headers_and_response_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def run() -> None:
+        captured: dict = {}
+
+        async def fake_request(method: str, url: str, **kwargs: object) -> httpx.Response:
+            captured.update({"method": method, "url": url, **kwargs})
+            return httpx.Response(
+                200,
+                json={"data": {"customer": {"id": "C/001", "name": "张三"}}},
+                request=httpx.Request(method, url),
+            )
+
+        monkeypatch.setattr("app.runtime.http_tool.safe_http_client.request", fake_request)
+        output = await http_tool_client.invoke(
+            {
+                "kind": "HTTP", "tool_name": "update_customer", "endpoint": "https://api.example.com",
+                "path": "/customers/{{customer_id}}", "method": "PATCH", "egress_allowlist": ["api.example.com"],
+                "header_template": {"X-Business-Dept": "{{dept}}"},
+                "body_template": {"name": "{{name}}"},
+                "response_mapping": {"body_path": "data", "fields": {"id": "customer.id", "name": "customer.name"}},
+            },
+            {"customer_id": "C/001", "dept": "sales", "name": "张三"},
+            "tenant", "user",
+        )
+        assert captured["method"] == "PATCH"
+        assert captured["url"] == "https://api.example.com/customers/C%2F001"
+        assert captured["headers"]["X-Business-Dept"] == "sales"
+        assert captured["json_body"] == {"name": "张三"}
+        assert output == {"status_code": 200, "body": {"id": "C/001", "name": "张三"}}
+
+    asyncio.run(run())
+
+
+def test_http_tool_rejects_security_sensitive_static_headers() -> None:
+    with pytest.raises(ApiError, match="HTTP_TOOL_HEADER_FORBIDDEN"):
+        ResourceRegistryStore._validate(ResourceType.TOOL, {
+            "kind": "HTTP", "tool_name": "unsafe_header", "endpoint": "https://api.example.com",
+            "path": "/customers", "method": "PUT", "egress_allowlist": ["api.example.com"],
+            "header_template": {"Authorization": "user supplied"},
+        })

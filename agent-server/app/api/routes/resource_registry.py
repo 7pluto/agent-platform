@@ -19,6 +19,7 @@ from app.db.session import get_session_factory
 from app.governance.models import GrantAction, GrantEffect, ResourceGrantCreate, ResourceGrantRecord, SubjectType
 from app.iam.models import Principal
 from app.resources.registry_factory import get_resource_registry
+from app.resources.registry_store import ResourceRegistryStore
 from app.resources.registry_models import (
     ResourceDefinitionCreate, ResourceDefinitionRecord, ResourceType, ResourceValidationRunRecord,
     ResourceValidationStatus, ResourceValidationType, ResourceVersionCreate, ResourceVersionRecord,
@@ -27,7 +28,10 @@ from app.resources.validation import get_resource_validation_service
 from app.resources.discovery import get_resource_discovery_service
 from app.runtime.dify_flow import DifyFlowClient
 from app.runtime.http_tool import http_tool_client
+from app.mcp.service import mcp_auth_headers, mcp_client
+from app.knowledge.providers.ragflow import RagflowKnowledgeProvider
 from app.resources.providers.registry import provider_registry
+from app.resources.product_governance import ProductGovernance, apply_product_governance, resolve_publication_subjects
 from app.secrets.vault import get_secret_vault
 
 router = APIRouter(tags=["resource-registry"])
@@ -73,7 +77,7 @@ class DifyApplicationPublishResponse(BaseModel):
     grants_created: int
 
 
-class HttpToolCreate(BaseModel):
+class HttpToolCreate(ProductGovernance):
     """Create a constrained API capability, not a user-programmable proxy."""
 
     slug: str = Field(pattern=r"^[a-z][a-z0-9-]{2,63}$")
@@ -82,10 +86,12 @@ class HttpToolCreate(BaseModel):
     tool_name: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_]{1,63}$")
     endpoint: str
     path: str = Field(default="/")
-    method: str = Field(default="GET", pattern=r"^(GET|POST)$")
+    method: str = Field(default="GET", pattern=r"^(GET|POST|PUT|PATCH)$")
     input_schema: dict = Field(default_factory=lambda: {"type": "object", "properties": {}})
     query_template: dict | list | None = None
     body_template: dict | list | None = None
+    header_template: dict[str, str] = Field(default_factory=dict)
+    response_mapping: dict = Field(default_factory=dict)
     timeout_seconds: float = Field(default=15, ge=0.1, le=60)
     api_key: str | None = Field(default=None, min_length=1, max_length=32_768)
     auth_header: str = Field(default="Authorization", min_length=1, max_length=128)
@@ -95,6 +101,29 @@ class HttpToolCreate(BaseModel):
 
 class HttpToolPublishResponse(BaseModel):
     resource_version: ResourceVersionRecord
+    test_result: dict
+
+
+class SkillTestCase(BaseModel):
+    input: str = Field(min_length=1, max_length=2_000)
+    expected_behavior: str = Field(min_length=1, max_length=2_000)
+
+
+class SkillProductCreate(BaseModel):
+    slug: str = Field(pattern=r"^[a-z][a-z0-9-]{2,63}$")
+    display_name: str = Field(min_length=1, max_length=128)
+    description: str = Field(default="可复用业务技能", max_length=4_000)
+    skill_md: str = Field(min_length=20, max_length=50_000)
+    tool_version_ids: list[UUID] = Field(default_factory=list, max_length=50)
+    knowledge_version_ids: list[UUID] = Field(default_factory=list, max_length=50)
+    test_cases: list[SkillTestCase] = Field(min_length=1, max_length=20)
+
+
+class SkillProductPublishResponse(BaseModel):
+    resource_id: UUID
+    resource_version_id: UUID
+    version_number: int
+    status: str
     test_result: dict
 
 
@@ -236,9 +265,8 @@ async def create_dify_application(request: DifyApplicationCreate, principal: Pri
     if not host:
         raise ApiError(422, "INVALID_DIFY_FLOW_CONFIG", "base_url must contain a hostname")
     publication_subjects = _publication_subjects(request)
-    connection_test = await DifyFlowClient(request.base_url.rstrip("/"), request.api_key, request.flow_type, request.timeout_seconds).test_connection(request.test_query)
     secret = await get_secret_vault().create(f"Dify Flow: {request.display_name}", request.api_key, principal)
-    config = {
+    base_config = {
         "kind": "DIFY_FLOW",
         "tool_name": request.tool_name,
         "description": request.description,
@@ -247,21 +275,43 @@ async def create_dify_application(request: DifyApplicationCreate, principal: Pri
         "secret_ref": secret.secret_ref,
         "timeout_seconds": request.timeout_seconds,
         "egress_allowlist": [host],
-        "input_schema": _dify_tool_input_schema(request.flow_type, connection_test.get("input_form", [])),
+        "input_schema": _dify_tool_input_schema(request.flow_type, []),
         "test_query": request.test_query,
-        "dify_input_form": connection_test.get("input_form", []),
         "application_profile": {
             "business_line": request.business_line,
             "data_involved": request.data_involved,
             "audience": request.audience,
             "usage_scenarios": request.usage_scenarios,
             "developer_user_ids": request.developer_user_ids,
-            "opening_statement": request.opening_statement or connection_test.get("opening_statement"),
-            "suggested_questions": request.suggested_questions or connection_test.get("suggested_questions", []),
+            "opening_statement": request.opening_statement,
+            "suggested_questions": request.suggested_questions,
             "publication_scope": request.publication_scope,
         },
     }
-    definition = await store.create_definition(ResourceDefinitionCreate(resource_type=ResourceType.TOOL, slug=request.slug, display_name=request.display_name, description=request.description, draft_config=config), principal)
+    definition = await store.create_definition(ResourceDefinitionCreate(resource_type=ResourceType.TOOL, slug=request.slug, display_name=request.display_name, description=request.description, draft_config=base_config), principal)
+    try:
+        connection_test = await DifyFlowClient(request.base_url.rstrip("/"), request.api_key, request.flow_type, request.timeout_seconds).test_connection(request.test_query)
+    except ApiError as exc:
+        failed_version = await store.create_version(definition.resource_id, ResourceVersionCreate(config=base_config), principal)
+        await validation_runs.record(
+            failed_version.resource_version_id, ResourceValidationType.VALIDATE, ResourceValidationStatus.FAILED,
+            {"provider": "DIFY", "code": exc.code, "message": exc.message}, principal,
+        )
+        await get_governance_store().record_audit(
+            principal, "dify_application.validation_failed", "TOOL", str(failed_version.resource_version_id),
+            {"resource_id": str(definition.resource_id), "code": exc.code, "fingerprint": secret.fingerprint},
+        )
+        raise
+    config = {
+        **base_config,
+        "input_schema": _dify_tool_input_schema(request.flow_type, connection_test.get("input_form", [])),
+        "dify_input_form": connection_test.get("input_form", []),
+        "application_profile": {
+            **base_config["application_profile"],
+            "opening_statement": request.opening_statement or connection_test.get("opening_statement"),
+            "suggested_questions": request.suggested_questions or connection_test.get("suggested_questions", []),
+        },
+    }
     version = await store.create_version(definition.resource_id, ResourceVersionCreate(config=config), principal)
     await validation_runs.record(version.resource_version_id, ResourceValidationType.VALIDATE, ResourceValidationStatus.SUCCEEDED, connection_test, principal)
     published = await store.publish_version(version.resource_version_id, principal)
@@ -276,7 +326,7 @@ async def create_dify_application(request: DifyApplicationCreate, principal: Pri
             actions=actions, effect=GrantEffect.ALLOW,
         ), principal))
     await governance.record_audit(principal, "dify_application.publish", "TOOL", str(published.resource_version_id), {
-        "resource_id": str(published.resource_id), "secret_ref": secret.secret_ref,
+        "resource_id": str(published.resource_id),
         "fingerprint": secret.fingerprint, "flow_type": request.flow_type,
         "publication_scope": request.publication_scope,
         "grant_count": len(grants), "input_count": len(connection_test.get("input_form", [])),
@@ -323,14 +373,64 @@ async def create_dify_flow_tool(request: DifyFlowToolCreate, principal: Principa
     published = await store.publish_version(version.resource_version_id, principal)
     await discovery_snapshots.capture_published(published, principal)
     await get_governance_store().record_audit(principal, "dify_flow_tool.publish", "TOOL", str(published.resource_version_id), {
-        "resource_id": str(published.resource_id), "secret_ref": secret.secret_ref, "fingerprint": secret.fingerprint,
+        "resource_id": str(published.resource_id), "fingerprint": secret.fingerprint,
     })
     return published
+
+
+@router.post("/skills", response_model=SkillProductPublishResponse, status_code=201)
+async def create_skill_product(request: SkillProductCreate, principal: Principal = Depends(require_platform_admin)) -> SkillProductPublishResponse:
+    """Publish a Skill only after its immutable dependencies and business tests compile."""
+    if not request.skill_md.lstrip().startswith("#"):
+        raise ApiError(422, "INVALID_SKILL_CONFIG", "SKILL.md must start with a Markdown heading")
+    dependency_ids = [*request.tool_version_ids, *request.knowledge_version_ids]
+    if len(dependency_ids) != len(set(dependency_ids)):
+        raise ApiError(422, "SKILL_DEPENDENCY_DUPLICATED", "Skill dependencies must be unique")
+    for version_id in request.tool_version_ids:
+        dependency = await store.get_version(version_id, principal, published=True)
+        if dependency.resource_type != ResourceType.TOOL:
+            raise ApiError(422, "SKILL_DEPENDENCY_TYPE_MISMATCH", "tool_version_ids may reference only published Tools")
+    for version_id in request.knowledge_version_ids:
+        dependency = await store.get_version(version_id, principal, published=True)
+        if dependency.resource_type != ResourceType.KNOWLEDGE:
+            raise ApiError(422, "SKILL_DEPENDENCY_TYPE_MISMATCH", "knowledge_version_ids may reference only published Knowledge")
+    config = {
+        "skill_md": request.skill_md,
+        "tool_version_ids": [str(value) for value in request.tool_version_ids],
+        "knowledge_version_ids": [str(value) for value in request.knowledge_version_ids],
+        "test_cases": [item.model_dump() for item in request.test_cases],
+    }
+    ResourceRegistryStore._validate(ResourceType.SKILL, config)
+    definition = await store.create_definition(ResourceDefinitionCreate(
+        resource_type=ResourceType.SKILL, slug=request.slug, display_name=request.display_name,
+        description=request.description, draft_config=config,
+    ), principal)
+    version = await store.create_version(definition.resource_id, ResourceVersionCreate(config=config), principal)
+    test_result = {
+        "test_case_count": len(request.test_cases),
+        "tool_dependency_count": len(request.tool_version_ids),
+        "knowledge_dependency_count": len(request.knowledge_version_ids),
+        "status": "COMPILED",
+    }
+    await validation_runs.record(
+        version.resource_version_id, ResourceValidationType.TEST, ResourceValidationStatus.SUCCEEDED,
+        test_result, principal,
+    )
+    published = await store.publish_version(version.resource_version_id, principal)
+    await get_governance_store().record_audit(
+        principal, "skill.publish", ResourceType.SKILL.value, str(published.resource_version_id),
+        {"resource_id": str(published.resource_id), **test_result},
+    )
+    return SkillProductPublishResponse(
+        resource_id=published.resource_id, resource_version_id=published.resource_version_id,
+        version_number=published.version_number, status=published.status.value, test_result=test_result,
+    )
 
 
 @router.post("/http-tools", response_model=HttpToolPublishResponse, status_code=201)
 async def create_http_tool(request: HttpToolCreate, principal: Principal = Depends(require_platform_admin)) -> HttpToolPublishResponse:
     """Register and validate one fixed HTTP capability before publication."""
+    resolve_publication_subjects(request)
     host = urlsplit(request.endpoint).hostname
     if not host:
         raise ApiError(422, "INVALID_HTTP_TOOL_CONFIG", "endpoint must contain a hostname")
@@ -344,6 +444,8 @@ async def create_http_tool(request: HttpToolCreate, principal: Principal = Depen
         "input_schema": request.input_schema,
         "timeout_seconds": request.timeout_seconds,
         "egress_allowlist": [host],
+        "header_template": request.header_template,
+        "response_mapping": request.response_mapping,
     }
     if request.query_template is not None:
         config["query_template"] = request.query_template
@@ -387,12 +489,21 @@ async def create_http_tool(request: HttpToolCreate, principal: Principal = Depen
     )
     published = await store.publish_version(version.resource_version_id, principal)
     await discovery_snapshots.capture_published(published, principal)
+    grants = await apply_product_governance(
+        product=request,
+        resource_type=ResourceType.TOOL.value,
+        resource_id=published.resource_id,
+        resource_version_id=published.resource_version_id,
+        source_type="HTTP",
+        source_ref=f"{request.method} {request.path}",
+        principal=principal,
+    )
     await get_governance_store().record_audit(
         principal,
         "http_tool.publish",
         "TOOL",
         str(published.resource_version_id),
-        {"endpoint_host": host, "method": request.method, "path": request.path},
+        {"endpoint_host": host, "method": request.method, "path": request.path, "publication_scope": request.publication_scope, "grant_count": len(grants)},
     )
     return HttpToolPublishResponse(resource_version=published, test_result={"status_code": test_result["status_code"]})
 
@@ -438,6 +549,9 @@ async def publish_resource_version(resource_version_id: UUID, principal: Princip
     if draft.resource_type == ResourceType.TOOL and draft.config.get("kind") == "HTTP":
         if not await validation_runs.has_successful_validation(resource_version_id, principal, ResourceValidationType.TEST):
             raise ApiError(409, "RESOURCE_TEST_REQUIRED", "HTTP Tool must pass a test before publish")
+    if draft.resource_type in {ResourceType.MCP_CONNECTION, ResourceType.KNOWLEDGE_CONNECTION}:
+        if not await validation_runs.has_successful_validation(resource_version_id, principal):
+            raise ApiError(409, "RESOURCE_VALIDATION_REQUIRED", "external connection must pass validation before publish")
     record = await store.publish_version(resource_version_id, principal)
     await discovery_snapshots.capture_published(record, principal)
     await get_governance_store().record_audit(principal, "resource_version.publish", record.resource_type.value, str(record.resource_version_id), {"content_hash": record.content_hash})
@@ -451,11 +565,9 @@ async def test_resource_version(
     principal: Principal = Depends(require_platform_admin),
 ) -> dict:
     record = await store.get_version(resource_version_id, principal)
-    if record.resource_type != ResourceType.TOOL or record.config.get("kind") not in {"DIFY_FLOW", "HTTP"}:
-        raise ApiError(422, "RESOURCE_TEST_UNSUPPORTED", "test is supported for DIFY_FLOW and governed HTTP Tool versions")
-    if record.config.get("kind") == "DIFY_FLOW":
+    if record.resource_type == ResourceType.TOOL and record.config.get("kind") == "DIFY_FLOW":
         outcome = await _validate_dify_version(record, principal, ResourceValidationType.TEST)
-    else:
+    elif record.resource_type == ResourceType.TOOL and record.config.get("kind") == "HTTP":
         started = perf_counter()
         result = await provider_registry.resolve(record.resource_type, record.config, principal).test(record.config, (request.input if request else {}))
         outcome = await validation_runs.record(
@@ -466,6 +578,10 @@ async def test_resource_version(
             principal,
             round((perf_counter() - started) * 1000),
         )
+    elif record.resource_type in {ResourceType.MCP_CONNECTION, ResourceType.KNOWLEDGE_CONNECTION}:
+        outcome = await _validate_external_connection(record, principal, ResourceValidationType.TEST)
+    else:
+        raise ApiError(422, "RESOURCE_TEST_UNSUPPORTED", "test is supported for Dify, HTTP, MCP and RAGFlow resource versions")
     await get_governance_store().record_audit(principal, "resource_version.test", record.resource_type.value, str(record.resource_version_id), {"validation_run_id": str(outcome.validation_run_id), "status": outcome.status.value})
     if outcome.status == ResourceValidationStatus.FAILED:
         raise ApiError(502, str(outcome.result.get("code") or outcome.result.get("error_code") or "UPSTREAM_ERROR"), str(outcome.result.get("message", "resource test failed")))
@@ -475,11 +591,45 @@ async def test_resource_version(
 @router.post("/resource-versions/{resource_version_id}/validate", response_model=ResourceValidationRunRecord)
 async def validate_resource_version(resource_version_id: UUID, principal: Principal = Depends(require_platform_admin)) -> ResourceValidationRunRecord:
     record = await store.get_version(resource_version_id, principal)
-    if record.resource_type != ResourceType.TOOL or record.config.get("kind") not in {"DIFY_FLOW", "HTTP"}:
-        raise ApiError(422, "RESOURCE_VALIDATION_UNSUPPORTED", "validation is supported for DIFY_FLOW and governed HTTP Tool versions")
-    outcome = await _validate_dify_version(record, principal, ResourceValidationType.VALIDATE)
+    if record.resource_type == ResourceType.TOOL and record.config.get("kind") == "DIFY_FLOW":
+        outcome = await _validate_dify_version(record, principal, ResourceValidationType.VALIDATE)
+    elif record.resource_type in {ResourceType.MCP_CONNECTION, ResourceType.KNOWLEDGE_CONNECTION}:
+        outcome = await _validate_external_connection(record, principal, ResourceValidationType.VALIDATE)
+    else:
+        raise ApiError(422, "RESOURCE_VALIDATION_UNSUPPORTED", "validation is supported for Dify, MCP and RAGFlow resource versions")
     await get_governance_store().record_audit(principal, "resource_version.validate", record.resource_type.value, str(record.resource_version_id), {"validation_run_id": str(outcome.validation_run_id), "status": outcome.status.value})
     return outcome
+
+
+async def _validate_external_connection(
+    record: ResourceVersionRecord,
+    principal: Principal,
+    validation_type: ResourceValidationType,
+) -> ResourceValidationRunRecord:
+    started = perf_counter()
+    try:
+        if record.resource_type == ResourceType.MCP_CONNECTION:
+            headers = await mcp_auth_headers(record.config, principal.tenant_id, principal.external_user_id)
+            tools = await mcp_client.discover(
+                str(record.config["endpoint"]), float(record.config.get("timeout_seconds", 10)),
+                headers, record.config.get("egress_allowlist", []),
+            )
+            result = {"provider": "MCP", "tool_count": len(tools)}
+        else:
+            datasets = await RagflowKnowledgeProvider(principal).discover_datasets(record.config)
+            result = {"provider": "RAGFLOW", "dataset_count": len(datasets)}
+        return await validation_runs.record(
+            record.resource_version_id, validation_type, ResourceValidationStatus.SUCCEEDED,
+            result, principal, round((perf_counter() - started) * 1000),
+        )
+    except Exception as exc:
+        code = exc.code if isinstance(exc, ApiError) else "CONNECTION_VALIDATION_FAILED"
+        message = exc.message if isinstance(exc, ApiError) else type(exc).__name__
+        return await validation_runs.record(
+            record.resource_version_id, validation_type, ResourceValidationStatus.FAILED,
+            {"provider": "MCP" if record.resource_type == ResourceType.MCP_CONNECTION else "RAGFLOW", "code": code, "message": message},
+            principal, round((perf_counter() - started) * 1000),
+        )
 
 
 @router.get("/resource-versions/{resource_version_id}/validation-runs", response_model=list[ResourceValidationRunRecord])

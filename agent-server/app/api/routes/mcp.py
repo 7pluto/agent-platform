@@ -12,15 +12,18 @@ from app.api.dependencies import require_platform_admin, require_platform_admin_
 from app.iam.models import Principal
 from app.mcp.service import mcp_auth_headers, mcp_client
 from app.resources.registry_factory import get_resource_registry
-from app.resources.registry_models import ExternalBindingStatus, ResourceDefinitionCreate, ResourceExternalBindingRecord, ResourceType, ResourceVersionCreate, ResourceVersionRecord, ResourceVersionStatus
+from app.resources.registry_models import ExternalBindingStatus, ResourceDefinitionCreate, ResourceExternalBindingRecord, ResourceType, ResourceValidationStatus, ResourceValidationType, ResourceVersionCreate, ResourceVersionRecord, ResourceVersionStatus
 from app.resources.registry_store import ResourceRegistryStore
 from app.resources.bindings import get_external_binding_service
 from app.resources.discovery import get_resource_discovery_service
+from app.resources.validation import get_resource_validation_service
+from app.resources.product_governance import ProductGovernance, apply_product_governance, resolve_publication_subjects
 from app.secrets.vault import get_secret_vault
 
 router = APIRouter(tags=["mcp"])
 bindings = get_external_binding_service()
 discovery_snapshots = get_resource_discovery_service()
+validation_runs = get_resource_validation_service()
 
 
 class McpDiscoveredTool(BaseModel):
@@ -31,7 +34,7 @@ class McpDiscoveredTool(BaseModel):
     binding_status: ExternalBindingStatus | None = None
 
 
-class McpToolRegistration(BaseModel):
+class McpToolRegistration(ProductGovernance):
     """A display-only selection from a server-side MCP discovery result.
 
     The API deliberately does not accept an input schema here.  Schemas are
@@ -133,8 +136,6 @@ async def create_mcp_connection(request: McpConnectionCreate, principal: Princip
     if not host:
         from app.core.errors import ApiError
         raise ApiError(422, "INVALID_MCP_CONNECTION", "endpoint must contain a hostname")
-    headers = {request.auth_header: f"{request.auth_scheme} {request.api_key}".strip()} if request.api_key else {}
-    await mcp_client.discover(request.endpoint, request.timeout_seconds, headers, [host])
     config = {"transport": "streamable_http", "endpoint": request.endpoint, "timeout_seconds": request.timeout_seconds, "egress_allowlist": [host]}
     fingerprint = None
     if request.api_key:
@@ -144,6 +145,16 @@ async def create_mcp_connection(request: McpConnectionCreate, principal: Princip
     registry = get_resource_registry()
     definition = await registry.create_definition(ResourceDefinitionCreate(resource_type=ResourceType.MCP_CONNECTION, slug=request.slug, display_name=request.display_name, draft_config=config), principal)
     version = await registry.create_version(definition.resource_id, ResourceVersionCreate(config=config), principal)
+    headers = {request.auth_header: f"{request.auth_scheme} {request.api_key}".strip()} if request.api_key else {}
+    try:
+        tools = await mcp_client.discover(request.endpoint, request.timeout_seconds, headers, [host])
+    except Exception as exc:
+        from app.core.errors import ApiError
+        code = exc.code if isinstance(exc, ApiError) else "MCP_CONNECTION_FAILED"
+        message = exc.message if isinstance(exc, ApiError) else type(exc).__name__
+        await validation_runs.record(version.resource_version_id, ResourceValidationType.VALIDATE, ResourceValidationStatus.FAILED, {"provider": "MCP", "code": code, "message": message}, principal)
+        raise
+    await validation_runs.record(version.resource_version_id, ResourceValidationType.VALIDATE, ResourceValidationStatus.SUCCEEDED, {"provider": "MCP", "tool_count": len(tools)}, principal)
     published = await registry.publish_version(version.resource_version_id, principal)
     await discovery_snapshots.capture_published(published, principal)
     from app.governance.store_factory import get_governance_store
@@ -205,6 +216,9 @@ async def register_discovered_tools_batch(
         {binding.external_id for binding in existing_bindings if binding.external_type == "TOOL"},
         {definition.slug for definition in existing_definitions},
     )
+    # Validate every publication policy before creating the first definition.
+    for selection, _ in selected:
+        resolve_publication_subjects(selection)
 
     published: list[ResourceVersionRecord] = []
     for selection, item in selected:
@@ -235,6 +249,28 @@ async def register_discovered_tools_batch(
         version = await registry.create_version(definition.resource_id, ResourceVersionCreate(), principal)
         published_version = await registry.publish_version(version.resource_version_id, principal)
         await discovery_snapshots.capture_published(published_version, principal)
+        grants = await apply_product_governance(
+            product=selection,
+            resource_type=ResourceType.TOOL.value,
+            resource_id=published_version.resource_id,
+            resource_version_id=published_version.resource_version_id,
+            source_type="MCP",
+            source_ref=selection.tool_name,
+            principal=principal,
+        )
+        from app.governance.store_factory import get_governance_store
+        await get_governance_store().record_audit(
+            principal,
+            "mcp_tool.publish",
+            ResourceType.TOOL.value,
+            str(published_version.resource_version_id),
+            {
+                "connection_version_id": str(request.connection_version_id),
+                "external_tool_name": selection.tool_name,
+                "publication_scope": selection.publication_scope,
+                "grant_count": len(grants),
+            },
+        )
         published.append(published_version)
     return published
 

@@ -38,10 +38,23 @@ def main() -> None:
 
     login = request("/auth/exchange", "POST", {"ticket_code": "dev-ticket"})
     csrf = login["csrf_token"]
+    conversation_session = request(
+        f"/deployments/{args.deployment_id}/conversations",
+        "POST",
+        {"title": f"CLI 验收 {time.strftime('%Y-%m-%d %H:%M:%S')}"},
+        {"X-CSRF-Token": csrf},
+    )
+    conversation_id = conversation_session["conversation"]["conversation_id"]
+    thread_id = conversation_session["thread"]["thread_id"]
     run = request(
         f"/deployments/{args.deployment_id}/runs",
         "POST",
-        {"deployment_id": args.deployment_id, "message": args.message},
+        {
+            "deployment_id": args.deployment_id,
+            "conversation_id": conversation_id,
+            "thread_id": thread_id,
+            "message": args.message,
+        },
         {"X-CSRF-Token": csrf, "Idempotency-Key": f"acceptance-{uuid.uuid4()}"},
     )
     run_id = run["run_id"]
@@ -59,6 +72,8 @@ def main() -> None:
     summary = {
         "deployment_id": args.deployment_id,
         "run_id": run_id,
+        "conversation_id": conversation_id,
+        "thread_id": thread_id,
         "status": status,
         "manifest_hash": detail["manifest"]["manifest_hash"],
         "resource_types": sorted({item["type"] for item in detail["manifest"]["resources"]}),

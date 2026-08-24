@@ -45,6 +45,11 @@ services:
     expose:
       - "8090"
 
+  demo-enterprise-services:
+    build: ./demo-enterprise-services
+    expose:
+      - "8091"
+
   agent-migrate:
     build: ./agent-server
     command: ["alembic", "upgrade", "head"]

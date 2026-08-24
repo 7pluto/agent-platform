@@ -29,6 +29,26 @@
 .knowledge-provider-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
 .knowledge-provider-tabs button { padding: 6px 9px; border-radius: 999px; color: #68758d; background: #f1f3f7; font-size: 11px; font-weight: 700; }
 .knowledge-provider-tabs button.active { color: #4d3fc3; background: #ece9ff; }
+.mcp-discovery-section { display: grid; gap: 14px; }
+.mcp-tool-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(310px,1fr)); gap: 12px; }
+.mcp-tool-card { display: grid; gap: 11px; padding: 15px; border: 1px solid #e2e6ee; border-radius: 12px; }
+.mcp-tool-card.selected { border-color: #958aef; box-shadow: 0 0 0 2px #efedff inset; }
+.mcp-tool-card.managed { background: #f8f9fb; }
+.mcp-tool-card > header { display: flex; align-items: start; justify-content: space-between; gap: 10px; padding: 0; border: 0; }
+.mcp-tool-select { display: flex; align-items: start; gap: 9px; }
+.mcp-tool-select span { display: grid; gap: 4px; }
+.mcp-tool-select small { color: #748096; line-height: 1.45; }
+.mcp-tool-form { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; padding-top: 10px; border-top: 1px solid #e8ebf1; }
+.mcp-tool-form label { display: grid; gap: 5px; color: #59667c; font-size: 12px; font-weight: 700; }
+.mcp-tool-form .wide-field { grid-column: 1 / -1; }
+.mcp-register-actions { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px; border-radius: 11px; background: #f1efff; }
+.mcp-register-actions p { color: #61589a; }
+.skill-dependency-picker { display: grid; gap: 8px; }
+.skill-dependency-picker > p { color: #758197; font-size: 12px; }
+.skill-dependency-picker > div { display: grid; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); gap: 8px; }
+.skill-dependency-picker button { display: grid; gap: 4px; padding: 11px; border: 1px solid #dfe3eb; border-radius: 10px; color: #46536a; background: white; text-align: left; }
+.skill-dependency-picker button.selected { border-color: #7568e4; color: #493cc3; background: #f0eeff; }
+.skill-dependency-picker small { color: #7b8597; }
 .button.danger:disabled { cursor: not-allowed; opacity: .55; }
 .trace-panel > summary small { color: #727b91; font-weight: 600; }
 .trace-event { display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 10px; }
@@ -308,3 +328,47 @@
   .resource-detail-page .drawer-body { margin: 0 10px 24px; }
   .connection-summary-grid { grid-template-columns: 1fr; }
 }
+.publication-scope-picker { display: grid; gap: 16px; }
+.publication-scope-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.publication-scope-cards button, .publication-subject-cards button { border: 1px solid #dce2ef; background: #fff; border-radius: 14px; padding: 14px; text-align: left; display: grid; gap: 5px; color: #27324b; }
+.publication-scope-cards button small, .publication-subject-cards button small { color: #73809a; font-size: 12px; }
+.publication-scope-cards button.selected, .publication-subject-cards button.selected { border-color: #6558e8; background: #f2f0ff; box-shadow: 0 0 0 2px rgb(101 88 232 / 10%); }
+.publication-owner-dept { max-width: 520px; }
+.publication-subject-groups { display: grid; gap: 16px; }
+.publication-subject-groups > section { display: grid; gap: 8px; }
+.publication-subject-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; max-height: 230px; overflow: auto; padding: 2px; }
+.version-validation-summary { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 8px 0; }
+.version-validation-summary small { color: #6f7890; }
+@media (max-width: 780px) { .publication-scope-cards { grid-template-columns: 1fr; } }
+.secret-vault { margin-top: 28px; padding: 24px; }
+.secret-vault-heading, .secret-vault-actions, .secret-card footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.secret-vault-heading > div:first-child { max-width: 760px; }
+.secret-vault-heading h2 { margin: 4px 0 8px; }
+.secret-vault-heading p { margin-bottom: 0; }
+.secret-card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; margin-top: 20px; }
+.secret-card { border: 1px solid var(--line); border-radius: 18px; padding: 18px; background: var(--surface, #fff); }
+.secret-card h3 { margin: 16px 0 12px; }
+.secret-card dl { display: grid; grid-template-columns: 86px 1fr; gap: 8px 12px; margin: 0 0 16px; font-size: 13px; }
+.secret-card dt { color: var(--muted); }
+.secret-card dd { margin: 0; overflow-wrap: anywhere; }
+.compact-modal { max-width: 560px; }
+@media (max-width: 720px) {
+  .secret-vault-heading { align-items: flex-start; flex-direction: column; }
+  .secret-vault-actions { width: 100%; }
+}
+.memory-summary-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.memory-summary-heading h3 { margin: 0; }
+.memory-item { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-top: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255, 255, 255, .7); }
+.memory-item span { display: grid; gap: 3px; min-width: 0; }
+.memory-item b { font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+.message { position: relative; }
+.message > span { display: block; }
+.message-memory-action { margin-top: 8px; border: 0; padding: 0; background: transparent; color: var(--primary); font-size: 11px; cursor: pointer; opacity: .76; }
+.message-memory-action:hover { opacity: 1; text-decoration: underline; }
+.message.user .message-memory-action { color: #fff; }
+.conversation-item-row { display: grid; grid-template-columns: minmax(0, 1fr) 30px; align-items: center; border: 1px solid transparent; border-radius: 10px; }
+.conversation-item-row.active { border-color: #ccc7f9; color: #483bbd; background: #efedff; }
+.conversation-item-row .conversation-item { width: 100%; border: 0; }
+.conversation-item-row.active .conversation-item { color: #483bbd; }
+.conversation-rename { border: 0; width: 28px; height: 28px; border-radius: 8px; color: #6e7190; background: transparent; cursor: pointer; }
+.conversation-rename:hover { color: #483bbd; background: rgba(95, 81, 216, .1); }

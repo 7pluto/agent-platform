@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.db.models import AuditEventRow, ResourceGrantRow
 from app.db.rls import set_local_tenant_context
@@ -45,6 +45,27 @@ class PostgresGovernanceStore:
                     statement = statement.where(ResourceGrantRow.resource_id == resource_id)
                 rows = await session.scalars(statement.order_by(ResourceGrantRow.created_at, ResourceGrantRow.grant_id))
                 return [self._grant(row) for row in rows.all()]
+
+    async def delete_grant(self, grant_id, principal: Principal) -> ResourceGrantRecord | None:
+        async with get_session_factory()() as session:
+            async with session.begin():
+                await set_local_tenant_context(session, principal.tenant_id, principal.external_user_id)
+                row = await session.scalar(
+                    select(ResourceGrantRow).where(
+                        ResourceGrantRow.tenant_id == principal.tenant_id,
+                        ResourceGrantRow.grant_id == grant_id,
+                    )
+                )
+                if row is None:
+                    return None
+                record = self._grant(row)
+                await session.execute(
+                    delete(ResourceGrantRow).where(
+                        ResourceGrantRow.tenant_id == principal.tenant_id,
+                        ResourceGrantRow.grant_id == grant_id,
+                    )
+                )
+                return record
 
     async def is_allowed(self, principal: Principal, action: str, resource_type: str, resource_id: str) -> bool:
         async with get_session_factory()() as session:

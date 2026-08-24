@@ -170,6 +170,47 @@ export interface ResourceGrant {
   created_by: string
   created_at: string
 }
+export interface AuditEvent {
+  audit_event_id: string
+  tenant_id: string
+  actor_id: string
+  action: string
+  resource_type: string
+  resource_id: string
+  data: Record<string, unknown>
+  occurred_at: string
+}
+
+export interface SecretRecord {
+  secret_id: string
+  name: string
+  fingerprint: string
+  status: 'ACTIVE' | 'DISABLED'
+  last_used_at?: string
+  rotated_at?: string
+  disabled_at?: string
+  created_by: string
+  created_at: string
+}
+
+export interface ProductGovernancePayload {
+  owner_user_id: string
+  owner_dept_id?: string
+  one_line_summary: string
+  when_to_use: string
+  when_not_to_use?: string
+  input_summary: string
+  output_summary: string
+  risk_level: 'LOW' | 'MEDIUM' | 'HIGH'
+  read_only: boolean
+  tags: string[]
+  business_line?: string
+  data_involved?: string
+  audience?: string
+  usage_scenarios?: string
+  publication_scope: 'PERSONAL' | 'OWNER_DEPT' | 'SELECTED_SUBJECTS'
+  publication_subjects: Array<{ subject_type: 'USER' | 'ROLE' | 'DEPT'; subject_id: string }>
+}
 
 export type RegistryResourceType = 'PROMPT' | 'SKILL' | 'TOOL' | 'MCP_SERVER' | 'MCP_CONNECTION' | 'KNOWLEDGE_CONNECTION' | 'KNOWLEDGE' | 'MEMORY_POLICY'
 export interface RegistryResource {
@@ -268,6 +309,15 @@ export interface DiscoverySnapshot {
   snapshot: Record<string, unknown>
   created_at: string
 }
+export interface ResourceValidationRun {
+  validation_run_id: string
+  resource_version_id: string
+  validation_type: 'PROBE' | 'DISCOVER' | 'TEST' | 'VALIDATE' | string
+  status: 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | string
+  result: Record<string, unknown>
+  latency_ms?: number
+  created_at: string
+}
 export interface DriftReport {
   resource_version_id: string
   provider: string
@@ -278,6 +328,10 @@ export interface DriftReport {
   current_snapshot?: Record<string, unknown>
   draft_version_id?: string
   checked_at: string
+}
+export interface McpDiscoveredTool {
+  name: string; description?: string; input_schema: Record<string, unknown>; managed: boolean
+  binding_status?: 'MANAGED' | 'CHANGED' | 'MISSING'
 }
 export interface KnowledgeOverview {
   resource_id: string; resource_version_id: string; display_name: string; description?: string
@@ -423,9 +477,13 @@ export const api = {
   checkResourceDrift: (resourceVersionId: string, csrf: string, createDraft = true) => request<DriftReport>(`/api/v1/resource-versions/${resourceVersionId}/drift-check`, {
     method: 'POST', headers: { 'X-CSRF-Token': csrf }, body: JSON.stringify({ create_draft: createDraft }),
   }),
-  testResourceVersion: (resourceVersionId: string, csrf: string) => request<{ available: boolean; flow_type: string; has_retrieval: boolean }>(`/api/v1/resource-versions/${resourceVersionId}/test`, {
+  testResourceVersion: (resourceVersionId: string, csrf: string) => request<Record<string, unknown>>(`/api/v1/resource-versions/${resourceVersionId}/test`, {
     method: 'POST', headers: { 'X-CSRF-Token': csrf },
   }),
+  validateResourceVersion: (resourceVersionId: string, csrf: string) => request<ResourceValidationRun>(`/api/v1/resource-versions/${resourceVersionId}/validate`, {
+    method: 'POST', headers: { 'X-CSRF-Token': csrf },
+  }),
+  listResourceValidationRuns: (resourceVersionId: string) => request<ResourceValidationRun[]>(`/api/v1/resource-versions/${resourceVersionId}/validation-runs`),
   createDifyFlowTool: (payload: {
     slug: string; display_name: string; description: string; flow_type: 'CHATFLOW' | 'WORKFLOW'; base_url: string
     api_key: string; tool_name: string; timeout_seconds: number; test_query: string
@@ -440,27 +498,37 @@ export const api = {
   createMcpConnection: (payload: { slug: string; display_name: string; endpoint: string; timeout_seconds: number; api_key: string | null; auth_header: string; auth_scheme: string }, csrf: string) => request<RegistryResourceVersion>('/api/v1/mcp-connections', {
     method: 'POST', headers: { 'X-CSRF-Token': csrf }, body: JSON.stringify(payload),
   }),
+  discoverMcpTools: (resourceVersionId: string, csrf: string) => request<McpDiscoveredTool[]>(`/api/v1/mcp-connections/${resourceVersionId}/discover`, {
+    method: 'POST', headers: { 'X-CSRF-Token': csrf },
+  }),
+  registerMcpToolsBatch: (payload: { connection_version_id: string; tools: Array<{ tool_name: string; slug: string; display_name: string; description?: string } & ProductGovernancePayload> }, csrf: string) => request<RegistryResourceVersion[]>('/api/v1/mcp-tools/register-batch', {
+    method: 'POST', headers: { 'X-CSRF-Token': csrf }, body: JSON.stringify(payload),
+  }),
   createRagflowConnection: (payload: { slug: string; display_name: string; endpoint: string; api_key: string; timeout_seconds: number }, csrf: string) => request<RegistryResourceVersion>('/api/v1/ragflow-connections', {
     method: 'POST', headers: { 'X-CSRF-Token': csrf }, body: JSON.stringify(payload),
   }),
   discoverRagflowDatasets: (resourceVersionId: string, csrf: string) => request<Array<{ id: string; name: string; description?: string }>>(`/api/v1/ragflow-connections/${resourceVersionId}/discover`, {
     method: 'POST', headers: { 'X-CSRF-Token': csrf },
   }),
-  registerRagflowKnowledge: (payload: { connection_version_id: string; dataset_id: string; slug: string; display_name: string; description?: string }, csrf: string) => request<RegistryResourceVersion>('/api/v1/ragflow-knowledge/register', {
+  registerRagflowKnowledge: (payload: { connection_version_id: string; dataset_id: string; slug: string; display_name: string; description?: string } & ProductGovernancePayload, csrf: string) => request<RegistryResourceVersion>('/api/v1/ragflow-knowledge/register', {
     method: 'POST', headers: { 'X-CSRF-Token': csrf }, body: JSON.stringify(payload),
   }),
   createRemoteHttpKnowledge: (payload: {
     slug: string; display_name: string; description: string; endpoint: string; search_path: string; method: 'GET' | 'POST'; timeout_seconds: number
     api_key?: string; auth_header: string; auth_scheme: string; query_field: string; top_k_field: string; static_body: Record<string, unknown>
     items_path: string; id_field: string; content_field: string; title_field: string; score_field?: string; metadata_field: string; test_query: string; test_top_k: number
-  }, csrf: string) => request<{ resource_id: string; resource_version_id: string; version_number: number; status: string; test_result: { provider: string; hit_count: number } }>('/api/v1/remote-http-knowledge', {
+  } & ProductGovernancePayload, csrf: string) => request<{ resource_id: string; resource_version_id: string; version_number: number; status: string; test_result: { provider: string; hit_count: number } }>('/api/v1/remote-http-knowledge', {
     method: 'POST', headers: { 'X-CSRF-Token': csrf }, body: JSON.stringify(payload),
   }),
   createHttpTool: (payload: {
-    slug: string; display_name: string; description: string; tool_name: string; endpoint: string; path: string; method: 'GET' | 'POST'
+    slug: string; display_name: string; description: string; tool_name: string; endpoint: string; path: string; method: 'GET' | 'POST' | 'PUT' | 'PATCH'
     input_schema: Record<string, unknown>; query_template?: Record<string, unknown> | unknown[]; body_template?: Record<string, unknown> | unknown[]
+    header_template: Record<string, string>; response_mapping: Record<string, unknown>
     timeout_seconds: number; api_key?: string; auth_header: string; auth_scheme: string; test_arguments: Record<string, unknown>
-  }, csrf: string) => request<{ resource_version: RegistryResourceVersion; test_result: { status_code: number } }>('/api/v1/http-tools', {
+  } & ProductGovernancePayload, csrf: string) => request<{ resource_version: RegistryResourceVersion; test_result: { status_code: number } }>('/api/v1/http-tools', {
+    method: 'POST', headers: { 'X-CSRF-Token': csrf }, body: JSON.stringify(payload),
+  }),
+  createSkillProduct: (payload: { slug: string; display_name: string; description: string; skill_md: string; tool_version_ids: string[]; knowledge_version_ids: string[]; test_cases: Array<{ input: string; expected_behavior: string }> }, csrf: string) => request<{ resource_id: string; resource_version_id: string; version_number: number; status: string; test_result: Record<string, unknown> }>('/api/v1/skills', {
     method: 'POST', headers: { 'X-CSRF-Token': csrf }, body: JSON.stringify(payload),
   }),
   createResourceGrant: (payload: { subject_type: 'USER' | 'ROLE' | 'DEPT'; subject_id: string; resource_type: string; resource_id: string; actions: string[] }, csrf: string) => request('/api/v1/resource-grants', {
@@ -480,10 +548,10 @@ export const api = {
     method: 'POST',
     headers: { 'X-CSRF-Token': csrf },
   }),
-  createDeployment: (agentId: string, name: string, csrf: string) => request<Deployment>('/api/v1/deployments', {
+  createDeployment: (agentId: string, name: string, csrf: string, displayName?: string) => request<Deployment>('/api/v1/deployments', {
     method: 'POST',
     headers: { 'X-CSRF-Token': csrf },
-    body: JSON.stringify({ agent_id: agentId, name }),
+    body: JSON.stringify({ agent_id: agentId, name, description: displayName }),
   }),
   createRevision: (deploymentId: string, versionId: string, csrf: string) => request<DeploymentRevision>(
     `/api/v1/deployments/${deploymentId}/revisions`,
@@ -547,6 +615,17 @@ export const api = {
     `/api/v1/resource-grants${resourceId ? `?resource_id=${encodeURIComponent(resourceId)}` : ''}`,
     { headers: { 'X-CSRF-Token': csrf } },
   ),
+  deleteResourceGrant: (grantId: string, csrf: string) => request<void>(`/api/v1/resource-grants/${grantId}`, {
+    method: 'DELETE', headers: { 'X-CSRF-Token': csrf },
+  }),
+  listAuditEvents: (limit = 200) => request<AuditEvent[]>(`/api/v1/audit-events?limit=${limit}`),
+  listSecrets: () => request<SecretRecord[]>('/api/v1/secrets'),
+  rotateSecret: (secretId: string, value: string, csrf: string) => request<SecretRecord>(`/api/v1/secrets/${encodeURIComponent(secretId)}/rotate`, {
+    method: 'POST', headers: { 'X-CSRF-Token': csrf }, body: JSON.stringify({ value }),
+  }),
+  disableSecret: (secretId: string, csrf: string) => request<SecretRecord>(`/api/v1/secrets/${encodeURIComponent(secretId)}/disable`, {
+    method: 'POST', headers: { 'X-CSRF-Token': csrf },
+  }),
   createRunGrant: (subjectType: ResourceGrant['subject_type'], subjectId: string, deploymentId: string, csrf: string) => request<ResourceGrant>('/api/v1/resource-grants', {
     method: 'POST',
     headers: { 'X-CSRF-Token': csrf },

@@ -1024,7 +1024,7 @@ async def workbench_agents(
                 for resource_type_, _ in agent_resource_ids(resolved.agent_version.specification or {}):
                     counts[resource_type_.value] = counts.get(resource_type_.value, 0) + 1
             candidates.append(AgentListItem(deployment_id=deployment.deployment_id, agent_id=agent.agent_id,
-                display_name=agent.display_name, description=agent.description, deployment_name=deployment.name,
+                display_name=agent.display_name, description=agent.description, deployment_name=deployment.description or deployment.name,
                 active=is_active, revision_number=resolved.revision.revision_number if resolved else None,
                 capability_counts=counts))
         candidates.sort(key=lambda item: item.display_name.lower())
@@ -1063,7 +1063,7 @@ async def workbench_agents(
             items.append(AgentListItem(
                 deployment_id=deployment.deployment_id, agent_id=agent.agent_id,
                 display_name=agent.display_name, description=agent.description,
-                deployment_name=deployment.name, active=is_active,
+                deployment_name=deployment.description or deployment.name, active=is_active,
                 revision_number=revision.revision_number if revision else None,
                 capability_counts=counts, last_run_at=last_run_at,
             ))

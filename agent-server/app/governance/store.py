@@ -37,6 +37,14 @@ class GovernanceStore:
                 and (resource_id is None or grant.resource_id == resource_id)
             ]
 
+    async def delete_grant(self, grant_id: UUID, principal: Principal) -> ResourceGrantRecord | None:
+        async with self._lock:
+            record = self._grants.get(grant_id)
+            if record is None or record.tenant_id != principal.tenant_id:
+                return None
+            del self._grants[grant_id]
+            return record.model_copy(deep=True)
+
     async def is_allowed(self, principal: Principal, action: str, resource_type: str, resource_id: str) -> bool:
         async with self._lock:
             grants = [

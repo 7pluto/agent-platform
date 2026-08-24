@@ -73,9 +73,20 @@ def test_remote_http_knowledge_product_publish_tests_before_exposure(monkeypatch
             "items_path": "data.items",
             "content_field": "text",
             "test_query": "员工考勤管理办法",
+            "owner_user_id": "admin",
+            "one_line_summary": "检索企业人事制度",
+            "when_to_use": "回答员工制度问题时",
+            "input_summary": "员工提出的制度问题",
+            "output_summary": "相关制度条款",
+            "risk_level": "LOW",
+            "read_only": True,
+            "publication_scope": "PERSONAL",
         })
         assert response.status_code == 201, response.text
         payload = response.json()
         assert payload["status"] == "PUBLISHED"
         assert payload["test_result"] == {"provider": "REMOTE_HTTP", "hit_count": 1}
         assert "secret_ref" not in response.text
+        grants = client.get(f"/api/v1/resource-grants?resource_id={payload['resource_version_id']}")
+        assert grants.status_code == 200
+        assert any(item["subject_type"] == "USER" and "USE" in item["actions"] for item in grants.json())
