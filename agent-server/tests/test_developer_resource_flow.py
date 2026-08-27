@@ -37,6 +37,11 @@ def test_ruoyi_developer_can_publish_owned_skill_but_admin_needs_explicit_busine
         assert "agent_developer" in developer_session["principal"]["role_codes"]
         assert "agent_admin" not in developer_session["principal"]["role_codes"]
 
+        context = client.get("/api/v1/developer/resources/context")
+        assert context.status_code == 200, context.text
+        assert context.json()["developer"] is True
+        assert context.json()["external_user_id"] == "user-developer"
+
         tool = client.post(
             "/api/v1/developer/resources/native-tools",
             headers=developer_headers,
@@ -71,6 +76,19 @@ def test_ruoyi_developer_can_publish_owned_skill_but_admin_needs_explicit_busine
             },
         )
         assert skill.status_code == 201, skill.text
+        skill_payload = skill.json()
+
+        owned = client.get("/api/v1/developer/resources/mine")
+        assert owned.status_code == 200, owned.text
+        owned_ids = {item["resource_id"] for item in owned.json()}
+        assert tool_payload["resource_id"] in owned_ids
+        assert skill_payload["resource_id"] in owned_ids
+
+        available = client.get("/api/v1/developer/resources/available")
+        assert available.status_code == 200, available.text
+        available_ids = {item["resource_id"] for item in available.json()}
+        assert tool_payload["resource_id"] in available_ids
+        assert skill_payload["resource_id"] in available_ids
 
         admin_session, admin_headers = _exchange(client, "dev-ticket")
         assert "agent_admin" in admin_session["principal"]["role_codes"]
@@ -84,7 +102,6 @@ def test_ruoyi_developer_can_publish_owned_skill_but_admin_needs_explicit_busine
             role_codes=("agent_admin",),
         )
 
-        # Platform-admin status alone must not confer business USE permission.
         with pytest.raises(ApiError) as denied:
             asyncio.run(ensure_resource_action(
                 admin_principal,
@@ -94,7 +111,10 @@ def test_ruoyi_developer_can_publish_owned_skill_but_admin_needs_explicit_busine
             ))
         assert denied.value.code == "RESOURCE_FORBIDDEN"
 
-        # The developer's ownership grant is stored on the stable Definition ID.
+        admin_available_before = client.get("/api/v1/developer/resources/available")
+        assert admin_available_before.status_code == 200, admin_available_before.text
+        assert tool_payload["resource_id"] not in {item["resource_id"] for item in admin_available_before.json()}
+
         grants = client.get(
             f"/api/v1/resource-grants?resource_id={tool_payload['resource_id']}",
             headers=admin_headers,
@@ -106,7 +126,6 @@ def test_ruoyi_developer_can_publish_owned_skill_but_admin_needs_explicit_busine
         )
         assert {"VIEW", "USE", "EDIT", "PUBLISH", "MANAGE"}.issubset(set(owner_grant["actions"]))
 
-        # Explicit RuoYi Role grant makes the same immutable Tool Version usable.
         role_grant = client.post(
             "/api/v1/resource-grants",
             headers=admin_headers,
@@ -127,3 +146,7 @@ def test_ruoyi_developer_can_publish_owned_skill_but_admin_needs_explicit_busine
             "TOOL",
             tool_payload["resource_version_id"],
         ))
+
+        admin_available_after = client.get("/api/v1/developer/resources/available")
+        assert admin_available_after.status_code == 200, admin_available_after.text
+        assert tool_payload["resource_id"] in {item["resource_id"] for item in admin_available_after.json()}
