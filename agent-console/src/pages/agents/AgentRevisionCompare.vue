@@ -10,6 +10,7 @@ import {
 
 const props = defineProps<{
   deploymentId: string
+  activeRevisionId: string
   users: IamSubject[]
   departments: IamSubject[]
   roles: IamSubject[]
@@ -140,7 +141,9 @@ async function load() {
   error.value = ''
   try {
     history.value = await fetchRevisionHistory(props.deploymentId)
-    const active = history.value.find(item => item.active) || history.value[0]
+    const active = history.value.find(item => item.revision_id === props.activeRevisionId)
+      || history.value.find(item => item.active)
+      || history.value[0]
     targetId.value = active?.revision_id || ''
     const older = history.value
       .filter(item => active && item.revision_number < active.revision_number)
@@ -154,7 +157,7 @@ async function load() {
   }
 }
 
-watch(() => props.deploymentId, () => void load())
+watch(() => [props.deploymentId, props.activeRevisionId], () => void load())
 onMounted(() => void load())
 </script>
 
