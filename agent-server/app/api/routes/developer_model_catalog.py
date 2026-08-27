@@ -53,6 +53,17 @@ async def _list_mode(mode: Literal["CHAT", "EMBEDDING"], principal: Principal) -
     return sorted(result, key=lambda item: (item.display_name.lower(), -item.version_number))
 
 
+@router.get("", response_model=list[DeveloperTypedModelOption])
+async def list_legacy_embedding_models(principal: Principal = Depends(require_resource_developer_read)) -> list[DeveloperTypedModelOption]:
+    """Compatibility path used by the Knowledge onboarding UI.
+
+    Prompt/Skill Playground uses /chat explicitly; new Knowledge clients should
+    prefer /embedding. Keeping this path embedding-only prevents a chat model
+    from being selected for local vector indexing during the development phase.
+    """
+    return await _list_mode("EMBEDDING", principal)
+
+
 @router.get("/chat", response_model=list[DeveloperTypedModelOption])
 async def list_chat_models(principal: Principal = Depends(require_resource_developer_read)) -> list[DeveloperTypedModelOption]:
     return await _list_mode("CHAT", principal)
