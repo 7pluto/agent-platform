@@ -37,6 +37,22 @@ const resourceWizardStep = defineModel<number>('resourceWizardStep', { required:
 const resourceCategory = defineModel<ResourceCategory>('resourceCategory', { required: true })
 const resourceForm = defineModel<ResourceForm>('resourceForm', { required: true })
 const ragflowDatasets = defineModel<RagflowDataset[]>('ragflowDatasets', { required: true })
+
+const resourceRole = (type: string) => ({
+  MODEL: '负责理解问题、推理以及决定是否调用工具。',
+  PROMPT: '定义 Agent 的角色、回答边界、语气和业务规则。',
+  SKILL: '一套完成业务任务的方法，可组合 Tool 和 Knowledge 形成完整能力。',
+  TOOL: 'Agent 可以实际执行的动作或查询能力；来源可以是 Native、MCP、Dify 或 HTTP。',
+  MEMORY_POLICY: '定义 Agent 跨会话记住什么、何时写入以及保存多久。',
+} as Record<string, string>)[type] || '可被 Agent 组装和复用的能力资源。'
+
+const typeGuides = [
+  { type: 'MODEL', title: '模型', question: '谁来思考？', description: '选择负责推理和 Tool Calling 的大模型。' },
+  { type: 'PROMPT', title: 'Prompt', question: '它应该怎么回答？', description: '定义角色、规则和回答边界。' },
+  { type: 'SKILL', title: 'Skill', question: '它会完成什么任务？', description: '业务能力包，会组织步骤、工具和知识。' },
+  { type: 'TOOL', title: 'Tool', question: '它能实际做什么？', description: '查询系统、调用接口或执行确定性动作。' },
+  { type: 'MEMORY_POLICY', title: 'Memory', question: '它应该记住什么？', description: '控制跨会话长期记忆策略。' },
+]
 </script>
 
 <template>
@@ -45,10 +61,19 @@ const ragflowDatasets = defineModel<RagflowDataset[]>('ragflowDatasets', { requi
 <div>
 <p class="eyebrow">CAPABILITY CENTER</p>
 <h1>能力中心</h1>
-<p>管理可组装进智能体的模型、提示词、技能、工具与记忆策略；连接和知识库分别治理。</p>
+<p>这里放的是“可以组装进 Agent 的能力”。MCP、Dify 等只是能力来源，最终应纳管成 Tool 或 Knowledge 后再参与组装。</p>
 </div>
-<button class="button primary" @click="openResourceWizard">＋ 入驻新资源</button>
+<button class="button primary" @click="openResourceWizard">＋ 创建 / 接入资源</button>
 </div>
+
+<section class="capability-type-guide" aria-label="资源类型说明">
+<article v-for="guide in typeGuides" :key="guide.type" :class="{ active: resourceType === guide.type }" @click="resourceType = resourceType === guide.type ? 'ALL' : guide.type">
+<span>{{ guide.title }}</span>
+<b>{{ guide.question }}</b>
+<p>{{ guide.description }}</p>
+</article>
+</section>
+
 <ResourceOnboardingWizard
   v-if="resourceComposerOpen"
   v-model:resource-composer-open="resourceComposerOpen"
@@ -78,7 +103,7 @@ const ragflowDatasets = defineModel<RagflowDataset[]>('ragflowDatasets', { requi
 <option value="MODEL">模型</option>
 <option value="PROMPT">提示词</option>
 <option value="SKILL">技能</option>
-<option value="TOOL">工具 / Dify</option>
+<option value="TOOL">工具 / 外部能力</option>
 <option value="MEMORY_POLICY">记忆策略</option>
 </select>
 </div>
@@ -89,9 +114,10 @@ const ragflowDatasets = defineModel<RagflowDataset[]>('ragflowDatasets', { requi
 <span :class="['status-pill', item.lifecycle_status === 'ARCHIVED' ? 'blocked' : 'success']">{{ item.lifecycle_status === 'ARCHIVED' ? '已归档' : '可用' }}</span>
 </div>
 <h3>{{ item.display_name }}</h3>
-<p>{{ item.description || item.slug }}</p>
+<p class="resource-business-description">{{ item.description || '尚未填写业务说明' }}</p>
+<p class="resource-role-copy"><b>在 Agent 中：</b>{{ resourceRole(item.resource_type) }}</p>
 <div class="tag-list compact">
-<span>{{ item.source_type }}</span>
+<span>来源 {{ item.source_type }}</span>
 <span>{{ healthLabel(item.health) }}</span>
 <span>V{{ item.latest_version_number || '—' }}</span>
 <span>{{ item.referenced_by_count }} 个引用</span>
@@ -107,3 +133,15 @@ const ragflowDatasets = defineModel<RagflowDataset[]>('ragflowDatasets', { requi
 </section>
 </template>
 
+<style scoped>
+.capability-type-guide { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:10px; margin-bottom:16px; }
+.capability-type-guide article { padding:14px; border:1px solid #e4e7ec; border-radius:13px; background:#fff; cursor:pointer; transition:.15s ease; }
+.capability-type-guide article:hover,.capability-type-guide article.active { border-color:#8b7cf6; background:#f8f7ff; }
+.capability-type-guide span { color:#6958e8; font-size:12px; font-weight:800; }
+.capability-type-guide b { display:block; margin-top:7px; color:#1d2939; }
+.capability-type-guide p { margin:6px 0 0; color:#667085; font-size:12px; line-height:1.45; }
+.resource-business-description { margin-bottom:8px; }
+.resource-role-copy { margin:0; padding:9px 10px; border-radius:9px; background:#f8f9fc; color:#475467 !important; font-size:12px; line-height:1.5; }
+@media (max-width:1100px){.capability-type-guide{grid-template-columns:repeat(2,minmax(0,1fr));}}
+@media (max-width:640px){.capability-type-guide{grid-template-columns:1fr;}}
+</style>
