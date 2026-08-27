@@ -13,10 +13,18 @@ interface SessionPayload {
   principal: SessionPrincipal
   csrf_token: string
 }
+interface CommonResourceInstallResponse {
+  created: number
+  existing: number
+  items: Array<{ display_name: string; status: string }>
+}
 
 const session = ref<SessionPayload | null>(null)
 const developerEnabled = ref(false)
 const developerWorkspaceActive = ref(true)
+const developerWorkbenchKey = ref(0)
+const installingCommon = ref(false)
+const commonNotice = ref('')
 let timer: number | undefined
 
 const isKnownAdmin = computed(() => Boolean(session.value?.principal.role_codes.some(role => role === 'admin' || role === 'agent_admin')))
@@ -41,6 +49,28 @@ async function probeSession() {
   } catch {
     session.value = null
     developerEnabled.value = false
+  }
+}
+
+async function installCommonResources() {
+  if (!session.value || installingCommon.value) return
+  installingCommon.value = true
+  commonNotice.value = ''
+  try {
+    const response = await fetch('/api/v1/developer/resources/common/install', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'X-CSRF-Token': session.value.csrf_token },
+    })
+    const payload = await response.json().catch(() => ({})) as Partial<CommonResourceInstallResponse> & { message?: string; detail?: string }
+    if (!response.ok) throw new Error(payload.message || payload.detail || `HTTP ${response.status}`)
+    commonNotice.value = `常用资源已就绪：新增 ${payload.created || 0}，已有 ${payload.existing || 0}`
+    developerWorkbenchKey.value += 1
+    window.setTimeout(() => { commonNotice.value = '' }, 3600)
+  } catch (err) {
+    commonNotice.value = err instanceof Error ? `安装失败：${err.message}` : '常用资源安装失败'
+  } finally {
+    installingCommon.value = false
   }
 }
 
@@ -74,11 +104,16 @@ onBeforeUnmount(() => { if (timer !== undefined) window.clearInterval(timer) })
 <template>
   <template v-if="developerEnabled && session && developerWorkspaceActive">
     <DeveloperWorkbench
+      :key="developerWorkbenchKey"
       :principal="session.principal"
       :csrf-token="session.csrf_token"
       @logout="logoutDeveloper"
     />
-    <button class="root-workspace-switch use" @click="developerWorkspaceActive = false">使用工作台</button>
+    <div class="root-developer-actions">
+      <span v-if="commonNotice" class="common-notice">{{ commonNotice }}</span>
+      <button class="root-workspace-switch common" :disabled="installingCommon" @click="installCommonResources">{{ installingCommon ? '正在添加…' : '添加常用资源' }}</button>
+      <button class="root-workspace-switch use" @click="developerWorkspaceActive = false">使用工作台</button>
+    </div>
   </template>
   <template v-else>
     <App />
@@ -87,11 +122,16 @@ onBeforeUnmount(() => { if (timer !== undefined) window.clearInterval(timer) })
 </template>
 
 <style scoped>
-.root-workspace-switch {
+.root-developer-actions {
   position: fixed;
   right: 22px;
   bottom: 22px;
   z-index: 80;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.root-workspace-switch {
   border: 0;
   border-radius: 999px;
   padding: 11px 16px;
@@ -99,6 +139,28 @@ onBeforeUnmount(() => { if (timer !== undefined) window.clearInterval(timer) })
   cursor: pointer;
   box-shadow: 0 10px 28px rgba(16, 24, 40, .18);
 }
+.root-workspace-switch:disabled { opacity: .65; cursor: default; }
 .root-workspace-switch.use { color: #4338ca; background: white; }
-.root-workspace-switch.develop { color: white; background: #5b4ee5; }
+.root-workspace-switch.common { color: white; background: #111827; }
+.root-workspace-switch.develop {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  z-index: 80;
+  color: white;
+  background: #5b4ee5;
+}
+.common-notice {
+  max-width: 320px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: rgba(17, 24, 39, .94);
+  color: #fff;
+  font-size: 12px;
+  box-shadow: 0 10px 28px rgba(16, 24, 40, .18);
+}
+@media (max-width: 720px) {
+  .root-developer-actions { left: 14px; right: 14px; justify-content: flex-end; flex-wrap: wrap; }
+  .common-notice { width: 100%; max-width: none; }
+}
 </style>
