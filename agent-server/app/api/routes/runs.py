@@ -22,8 +22,16 @@ from app.governance.store_factory import get_governance_store
 from app.iam.models import Principal
 from app.runtime.manifest import build_execution_manifest
 from app.resources.store_factory import get_resource_store
-from app.control_plane.assembly import is_resource_assembly_v2, resolve_agent_assembly_for_run, validate_agent_assembly
-from app.runtime.models import ExecutionManifest, RunCreateRequest, RunDetail, RunEvent, RunRecord
+from app.control_plane.assembly import is_resource_assembly_v2, resolve_agent_assembly_for_run
+from app.runtime.models import (
+    ExecutionManifest,
+    PublicExecutionManifest,
+    PublicRunDetail,
+    PublicRunRecord,
+    RunCreateRequest,
+    RunEvent,
+    RunRecord,
+)
 from app.runtime.store_factory import get_run_store
 from app.runtime.worker import get_runtime_worker
 
@@ -78,13 +86,13 @@ def summarize_run_observability(records: list[tuple[RunRecord, list[RunEvent]]])
     )
 
 
-@router.post("/deployments/{deployment_id}/runs", response_model=RunRecord, status_code=202)
+@router.post("/deployments/{deployment_id}/runs", response_model=PublicRunRecord, status_code=202)
 async def create_run(
     deployment_id: UUID,
     request: RunCreateRequest,
     principal: Principal = Depends(require_fresh_mutation_principal),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-) -> RunRecord:
+) -> PublicRunRecord:
     if request.deployment_id != deployment_id:
         raise ApiError(400, "DEPLOYMENT_MISMATCH", "deployment_id path and body must match")
     if request.conversation_id is not None and request.thread_id is None:
@@ -99,9 +107,14 @@ async def create_run(
         raise ApiError(409, "CONVERSATION_DEPLOYMENT_MISMATCH", "conversation does not belong to deployment")
     if not idempotency_key:
         raise ApiError(400, "IDEMPOTENCY_KEY_REQUIRED", "Idempotency-Key is required")
+
     await ensure_resource_action(principal, "RUN", "DEPLOYMENT", str(deployment_id))
     resolved = await control_plane_store.resolve(deployment_id, principal)
-    assembled_bindings = await resolve_agent_assembly_for_run(resolved.agent_version.specification, principal) if is_resource_assembly_v2(resolved.agent_version.specification) else []
+    assembled_bindings = (
+        await resolve_agent_assembly_for_run(resolved.agent_version.specification, principal)
+        if is_resource_assembly_v2(resolved.agent_version.specification)
+        else []
+    )
     assembled_resources = [item.resource for item in assembled_bindings]
     configured_model_version_id = model_version_reference(resolved.agent_version.specification)
     configured_model = None
@@ -109,7 +122,10 @@ async def create_run(
         configured_model = await resource_store.get_model_version(configured_model_version_id, principal, require_available=True)
         if configured_model.config.get("model_mode", "CHAT") != "CHAT":
             raise ApiError(422, "CHAT_MODEL_REQUIRED", "Agent runtime requires a CHAT model version")
-    harness_type = "openai-compatible" if configured_model is not None else ("langgraph" if get_settings().runtime_harness == "langgraph_baseline" else "mock")
+
+    harness_type = "openai-compatible" if configured_model is not None else (
+        "langgraph" if get_settings().runtime_harness == "langgraph_baseline" else "mock"
+    )
     prompt_resource = next((item for item in assembled_resources if item.resource_type.value == "PROMPT"), None)
     assembled_secret_refs = {
         f"{item.resource_type.value.lower()}:{item.resource_version_id}": str(item.config["secret_ref"])
@@ -118,6 +134,9 @@ async def create_run(
     }
 
     def manifest_builder(record: RunRecord) -> ExecutionManifest:
+        # The persisted internal manifest remains execution-complete for
+        # compatibility with existing Workers. HTTP responses use the redacted
+        # PublicExecutionManifest model and never expose these server-only keys.
         return build_execution_manifest(
             record,
             deployment_revision_id=resolved.revision.deployment_revision_id,
@@ -127,20 +146,25 @@ async def create_run(
                 "agent_version_content_hash": resolved.agent_version.content_hash,
                 "deployment_revision_id": str(resolved.revision.deployment_revision_id),
                 **({"system_prompt": str(prompt_resource.config.get("template", ""))} if configured_model and prompt_resource else {}),
-                **({"model_version_id": str(configured_model.model_version_id), "model_version_content_hash": configured_model.content_hash, "model_config": json_module.dumps(configured_model.config, sort_keys=True)} if configured_model else {}),
+                **({
+                    "model_version_id": str(configured_model.model_version_id),
+                    "model_version_content_hash": configured_model.content_hash,
+                    "model_config": json_module.dumps(configured_model.config, sort_keys=True),
+                } if configured_model else {}),
             },
             policy_versions={"builder": "react@1", "observation": "standard@1"},
-            secret_refs={**({"model": configured_model.config["secret_ref"]} if configured_model else {}), **assembled_secret_refs},
+            secret_refs={
+                **({"model": configured_model.config["secret_ref"]} if configured_model else {}),
+                **assembled_secret_refs,
+            },
             resources=(
-                ([
-                    {
-                        "type": "MODEL",
-                        "resource_id": str(configured_model.model_id),
-                        "version_id": str(configured_model.model_version_id),
-                        "content_hash": configured_model.content_hash,
-                    }
-                ] if configured_model else []) + [
-                {
+                ([{
+                    "type": "MODEL",
+                    "resource_id": str(configured_model.model_id),
+                    "version_id": str(configured_model.model_version_id),
+                    "content_hash": configured_model.content_hash,
+                }] if configured_model else [])
+                + [{
                     "type": binding.resource.resource_type.value,
                     "resource_id": str(binding.resource.resource_id),
                     "version_id": str(binding.resource.resource_version_id),
@@ -148,8 +172,7 @@ async def create_run(
                     "binding_origin": binding.origin,
                     "dependency_path": binding.dependency_path,
                     "use_allowed": binding.use_allowed,
-                }
-                for binding in assembled_bindings]
+                } for binding in assembled_bindings]
             ),
             harness_type=harness_type,
         )
@@ -168,22 +191,27 @@ async def create_run(
         "run.create",
         "RUN",
         str(record.run_id),
-        {"deployment_id": str(deployment_id), "conversation_id": str(record.conversation_id) if record.conversation_id else None, "thread_id": str(record.thread_id), "manifest_hash": record.execution_manifest.manifest_hash},
+        {
+            "deployment_id": str(deployment_id),
+            "conversation_id": str(record.conversation_id) if record.conversation_id else None,
+            "thread_id": str(record.thread_id),
+            "manifest_hash": record.execution_manifest.manifest_hash,
+        },
     )
-    return record
+    return PublicRunRecord.from_internal(record)
 
 
-@router.get("/runs/{run_id}", response_model=RunRecord)
-async def get_run(run_id: UUID, principal: Principal = Depends(require_fresh_principal)) -> RunRecord:
-    return await run_store.get(run_id, principal)
+@router.get("/runs/{run_id}", response_model=PublicRunRecord)
+async def get_run(run_id: UUID, principal: Principal = Depends(require_fresh_principal)) -> PublicRunRecord:
+    return PublicRunRecord.from_internal(await run_store.get(run_id, principal))
 
 
-@router.get("/runs", response_model=list[RunRecord])
+@router.get("/runs", response_model=list[PublicRunRecord])
 async def list_runs(
     limit: int = Query(default=50, ge=1, le=200),
     principal: Principal = Depends(require_fresh_principal),
-) -> list[RunRecord]:
-    return await run_store.list_for_principal(principal, limit)
+) -> list[PublicRunRecord]:
+    return [PublicRunRecord.from_internal(item) for item in await run_store.list_for_principal(principal, limit)]
 
 
 @router.get("/observability/runs/summary", response_model=RunObservabilitySummary)
@@ -197,31 +225,27 @@ async def run_observability_summary(
     return summarize_run_observability(records)
 
 
-@router.get("/runs/{run_id}/detail", response_model=RunDetail)
-async def get_run_detail(run_id: UUID, principal: Principal = Depends(require_fresh_principal)) -> RunDetail:
+@router.get("/runs/{run_id}/detail", response_model=PublicRunDetail)
+async def get_run_detail(run_id: UUID, principal: Principal = Depends(require_fresh_principal)) -> PublicRunDetail:
     record = await run_store.get(run_id, principal)
     if record.execution_manifest is None:
         raise ApiError(409, "MANIFEST_UNAVAILABLE", "run has no execution manifest")
-    return RunDetail(
-        run=record,
-        manifest=record.execution_manifest,
-        events=await run_store.events(run_id, principal),
-    )
+    return PublicRunDetail.from_internal(record, await run_store.events(run_id, principal))
 
 
-@router.get("/runs/{run_id}/manifest", response_model=ExecutionManifest)
-async def get_manifest(run_id: UUID, principal: Principal = Depends(require_fresh_principal)) -> ExecutionManifest:
+@router.get("/runs/{run_id}/manifest", response_model=PublicExecutionManifest)
+async def get_manifest(run_id: UUID, principal: Principal = Depends(require_fresh_principal)) -> PublicExecutionManifest:
     record = await run_store.get(run_id, principal)
     if record.execution_manifest is None:
         raise ApiError(409, "MANIFEST_UNAVAILABLE", "run has no execution manifest")
-    return record.execution_manifest
+    return PublicExecutionManifest.from_internal(record.execution_manifest)
 
 
-@router.post("/runs/{run_id}/cancel", response_model=RunRecord)
-async def cancel_run(run_id: UUID, principal: Principal = Depends(require_fresh_mutation_principal)) -> RunRecord:
+@router.post("/runs/{run_id}/cancel", response_model=PublicRunRecord)
+async def cancel_run(run_id: UUID, principal: Principal = Depends(require_fresh_mutation_principal)) -> PublicRunRecord:
     record = await run_store.cancel(run_id, principal)
     await runtime_worker.submit_next(record.thread_id, record.tenant_id, record.user_id)
-    return record
+    return PublicRunRecord.from_internal(record)
 
 
 @router.get("/runs/{run_id}/events")
@@ -248,8 +272,11 @@ async def run_events(
             yield ": heartbeat\n\n"
             await asyncio.sleep(10)
 
-    return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 def _parse_last_event_id(value: str | None) -> int:
@@ -262,6 +289,8 @@ def _parse_last_event_id(value: str | None) -> int:
     if sequence < 0:
         raise ApiError(400, "INVALID_LAST_EVENT_ID", "Last-Event-ID must be a non-negative integer")
     return sequence
+
+
 async def _is_terminal(run_id: UUID, principal: Principal) -> bool:
     record = await run_store.get(run_id, principal)
     return record.status.value in {"COMPLETED", "FAILED", "CANCELLED"}
