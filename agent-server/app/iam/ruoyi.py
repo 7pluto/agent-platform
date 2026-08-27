@@ -120,6 +120,9 @@ class RuoYiIamProvider(IamProvider):
         elif subject_type == "DEPT":
             path = self.settings.ruoyi_dept_path
             params = {"name": query, "limit": str(limit)}
+        elif subject_type == "ROLE":
+            path = self.settings.ruoyi_role_search_path
+            params = {"name": query, "limit": str(limit)}
         else:
             return SubjectPage(items=[])
         try:
@@ -131,7 +134,12 @@ class RuoYiIamProvider(IamProvider):
         payload = self._json(response, "directory")
         self._raise_for_response(response, payload, "directory")
         raw = unwrap_data(payload)
-        items = raw if isinstance(raw, list) else raw.get("items", []) if isinstance(raw, dict) else []
+        if isinstance(raw, list):
+            items = raw
+        elif isinstance(raw, dict):
+            items = raw.get("items") or raw.get("rows") or raw.get("records") or []
+        else:
+            items = []
         return SubjectPage(
             items=[self._parse_subject(item, subject_type) for item in items[:limit]],
             next_cursor=None,
@@ -167,14 +175,25 @@ class RuoYiIamProvider(IamProvider):
     def _parse_subject(item: Any, subject_type: str) -> Subject:
         if not isinstance(item, dict):
             return Subject(type=subject_type, external_id=str(item), display_name=str(item))
-        key = "userId" if subject_type == "USER" else "deptId"
-        names = ("nickName", "userName", "name") if subject_type == "USER" else ("deptName", "name")
-        name = next((item.get(candidate) for candidate in names if item.get(candidate)), item.get(key) or "")
+        if subject_type == "USER":
+            key_candidates = ("userId", "id")
+            name_candidates = ("nickName", "userName", "name")
+            parent = item.get("deptId") or item.get("parentId")
+        elif subject_type == "ROLE":
+            key_candidates = ("roleKey", "roleId", "id")
+            name_candidates = ("roleName", "name", "roleKey")
+            parent = None
+        else:
+            key_candidates = ("deptId", "id")
+            name_candidates = ("deptName", "name")
+            parent = item.get("parentId")
+        external_id = next((item.get(key) for key in key_candidates if item.get(key) is not None), "")
+        name = next((item.get(candidate) for candidate in name_candidates if item.get(candidate)), external_id)
         return Subject(
             type=subject_type,
-            external_id=str(item.get(key) or item.get("id") or ""),
+            external_id=str(external_id),
             display_name=str(name),
-            parent_id=str(item["parentId"]) if item.get("parentId") else None,
+            parent_id=str(parent) if parent is not None else None,
         )
 
     @staticmethod
