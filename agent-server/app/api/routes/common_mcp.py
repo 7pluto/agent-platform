@@ -16,12 +16,13 @@ from app.api.routes.mcp import (
     register_discovered_tools_batch,
 )
 from app.core.errors import ApiError
+from app.governance.models import GrantAction, GrantEffect, ResourceGrantCreate, SubjectType
+from app.governance.store_factory import get_governance_store
 from app.iam.models import Principal
 from app.resources.bindings import get_external_binding_service
 from app.resources.product_governance import ProductGovernance, PublicationSubject, apply_product_governance
 from app.resources.registry_factory import get_resource_registry
 from app.resources.registry_models import ResourceType, ResourceVersionRecord, ResourceVersionStatus
-from app.governance.models import SubjectType
 
 
 router = APIRouter(prefix="/admin/common-mcp", tags=["common-demo-mcp"])
@@ -164,9 +165,39 @@ async def _published_connection(spec: McpServerSpec, principal: Principal) -> Re
     return max(published, key=lambda item: item.version_number)
 
 
+async def _ensure_developer_connection_grant(connection: ResourceVersionRecord, principal: Principal) -> None:
+    governance = get_governance_store()
+    grants = await governance.list_grants(
+        principal,
+        ResourceType.MCP_CONNECTION.value,
+        str(connection.resource_id),
+    )
+    required = {GrantAction.VIEW, GrantAction.USE}
+    if any(
+        grant.subject_type == SubjectType.ROLE
+        and grant.subject_id == "agent_developer"
+        and grant.effect == GrantEffect.ALLOW
+        and required.issubset(grant.actions)
+        for grant in grants
+    ):
+        return
+    await governance.create_grant(
+        ResourceGrantCreate(
+            subject_type=SubjectType.ROLE,
+            subject_id="agent_developer",
+            resource_type=ResourceType.MCP_CONNECTION.value,
+            resource_id=str(connection.resource_id),
+            actions=required,
+            effect=GrantEffect.ALLOW,
+        ),
+        principal,
+    )
+
+
 async def _ensure_connection(spec: McpServerSpec, principal: Principal) -> tuple[ResourceVersionRecord, str]:
     found = await _published_connection(spec, principal)
     if found:
+        await _ensure_developer_connection_grant(found, principal)
         return found, "EXISTING"
     created = await create_mcp_connection(
         McpConnectionCreate(slug=spec.slug, display_name=spec.display_name, endpoint=spec.endpoint, timeout_seconds=5),
@@ -181,6 +212,7 @@ async def _ensure_connection(spec: McpServerSpec, principal: Principal) -> tuple
         source_ref=spec.endpoint,
         principal=principal,
     )
+    await _ensure_developer_connection_grant(created, principal)
     return created, "CREATED"
 
 
