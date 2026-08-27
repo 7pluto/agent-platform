@@ -19,6 +19,15 @@ from app.resources.store_factory import get_resource_store
 router = APIRouter(prefix="/workbench/deployments", tags=["workbench-revision-history"])
 
 
+class RevisionDependencySnapshot(BaseModel):
+    version_id: UUID
+    resource_id: UUID
+    resource_type: str
+    display_name: str
+    version_number: int
+    content_hash: str
+
+
 class RevisionCapabilitySnapshot(BaseModel):
     version_id: UUID
     resource_id: UUID
@@ -26,7 +35,7 @@ class RevisionCapabilitySnapshot(BaseModel):
     display_name: str
     version_number: int
     content_hash: str
-    dependencies: list[UUID] = Field(default_factory=list)
+    dependencies: list[RevisionDependencySnapshot] = Field(default_factory=list)
 
 
 class RevisionPublicationSnapshot(BaseModel):
@@ -78,7 +87,10 @@ def _version_ids(specification: dict[str, Any]) -> list[UUID]:
 def _dependency_ids(config: dict[str, Any]) -> list[UUID]:
     result: list[UUID] = []
     for field in ("tool_version_ids", "knowledge_version_ids"):
-        for value in config.get(field, []) if isinstance(config.get(field, []), list) else []:
+        values = config.get(field, [])
+        if not isinstance(values, list):
+            continue
+        for value in values:
             try:
                 identifier = UUID(str(value))
             except (TypeError, ValueError):
@@ -88,59 +100,95 @@ def _dependency_ids(config: dict[str, Any]) -> list[UUID]:
     return result
 
 
+async def _resource_snapshot(
+    version_id: UUID,
+    principal: Principal,
+    *,
+    model_definitions: dict,
+    resource_definitions: dict,
+    include_dependencies: bool,
+) -> RevisionCapabilitySnapshot:
+    model_store = get_resource_store()
+    registry = get_resource_registry()
+
+    try:
+        model = await model_store.get_model_version(version_id, principal)
+    except ApiError as exc:
+        if exc.code != "NOT_FOUND":
+            raise
+    else:
+        definition = model_definitions.get(model.model_id)
+        return RevisionCapabilitySnapshot(
+            version_id=model.model_version_id,
+            resource_id=model.model_id,
+            resource_type="MODEL",
+            display_name=definition.display_name if definition else f"Model {str(model.model_id)[:8]}",
+            version_number=model.version_number,
+            content_hash=model.content_hash,
+        )
+
+    try:
+        version = await registry.get_version(version_id, principal)
+    except ApiError as exc:
+        if exc.code != "NOT_FOUND":
+            raise
+        # Keep deleted historical references visible instead of silently dropping
+        # them from a Revision comparison.
+        return RevisionCapabilitySnapshot(
+            version_id=version_id,
+            resource_id=version_id,
+            resource_type="UNKNOWN",
+            display_name=f"历史资源 {str(version_id)[:8]}",
+            version_number=0,
+            content_hash="",
+        )
+
+    definition = resource_definitions.get(version.resource_id)
+    dependencies: list[RevisionDependencySnapshot] = []
+    if include_dependencies:
+        for dependency_id in _dependency_ids(version.config):
+            dependency = await _resource_snapshot(
+                dependency_id,
+                principal,
+                model_definitions=model_definitions,
+                resource_definitions=resource_definitions,
+                include_dependencies=False,
+            )
+            dependencies.append(RevisionDependencySnapshot(
+                version_id=dependency.version_id,
+                resource_id=dependency.resource_id,
+                resource_type=dependency.resource_type,
+                display_name=dependency.display_name,
+                version_number=dependency.version_number,
+                content_hash=dependency.content_hash,
+            ))
+
+    return RevisionCapabilitySnapshot(
+        version_id=version.resource_version_id,
+        resource_id=version.resource_id,
+        resource_type=version.resource_type.value,
+        display_name=definition.display_name if definition else f"{version.resource_type.value} {str(version.resource_id)[:8]}",
+        version_number=version.version_number,
+        content_hash=version.content_hash,
+        dependencies=dependencies,
+    )
+
+
 async def _capability_snapshots(specification: dict[str, Any], principal: Principal) -> list[RevisionCapabilitySnapshot]:
     model_store = get_resource_store()
     registry = get_resource_registry()
     model_definitions = {item.model_id: item for item in await model_store.list_models(principal)}
     resource_definitions = {item.resource_id: item for item in await registry.list_definitions(principal)}
-    snapshots: list[RevisionCapabilitySnapshot] = []
-
-    for version_id in _version_ids(specification):
-        try:
-            model = await model_store.get_model_version(version_id, principal)
-        except ApiError as exc:
-            if exc.code != "NOT_FOUND":
-                raise
-        else:
-            definition = model_definitions.get(model.model_id)
-            snapshots.append(RevisionCapabilitySnapshot(
-                version_id=model.model_version_id,
-                resource_id=model.model_id,
-                resource_type="MODEL",
-                display_name=definition.display_name if definition else f"Model {str(model.model_id)[:8]}",
-                version_number=model.version_number,
-                content_hash=model.content_hash,
-            ))
-            continue
-
-        try:
-            version = await registry.get_version(version_id, principal)
-        except ApiError as exc:
-            if exc.code != "NOT_FOUND":
-                raise
-            # Historical governance must remain readable even if a referenced
-            # definition has since been removed from the current registry.
-            snapshots.append(RevisionCapabilitySnapshot(
-                version_id=version_id,
-                resource_id=version_id,
-                resource_type="UNKNOWN",
-                display_name=f"历史资源 {str(version_id)[:8]}",
-                version_number=0,
-                content_hash="",
-            ))
-            continue
-
-        definition = resource_definitions.get(version.resource_id)
-        snapshots.append(RevisionCapabilitySnapshot(
-            version_id=version.resource_version_id,
-            resource_id=version.resource_id,
-            resource_type=version.resource_type.value,
-            display_name=definition.display_name if definition else f"{version.resource_type.value} {str(version.resource_id)[:8]}",
-            version_number=version.version_number,
-            content_hash=version.content_hash,
-            dependencies=_dependency_ids(version.config),
-        ))
-    return snapshots
+    return [
+        await _resource_snapshot(
+            version_id,
+            principal,
+            model_definitions=model_definitions,
+            resource_definitions=resource_definitions,
+            include_dependencies=True,
+        )
+        for version_id in _version_ids(specification)
+    ]
 
 
 async def _publication_snapshots(
@@ -148,7 +196,7 @@ async def _publication_snapshots(
     principal: Principal,
 ) -> dict[UUID, RevisionPublicationSnapshot]:
     # publish_configuration already records one immutable audit event containing
-    # the revision id and normalized RuoYi publication bindings. Reuse that
+    # the Revision id and normalized RuoYi publication bindings. Reuse that
     # append-only history instead of adding another development-stage table.
     events = await get_governance_store().list_audit(principal, limit=2_000)
     snapshots: dict[UUID, RevisionPublicationSnapshot] = {}
