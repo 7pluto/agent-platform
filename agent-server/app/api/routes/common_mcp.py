@@ -109,8 +109,8 @@ def _connection_governance(spec: McpServerSpec, principal: Principal) -> Product
         business_line="通用演示",
         audience="平台管理员",
         usage_scenarios="MCP 能力发现与 Tool 纳管",
-        publication_scope="PERSONAL",
-        publication_subjects=[],
+        publication_scope="SELECTED_SUBJECTS",
+        publication_subjects=[PublicationSubject(subject_type=SubjectType.ROLE, subject_id="agent_admin")],
     )
 
 
@@ -150,19 +150,19 @@ SERVERS = [
 ]
 
 
-async def _published_connection(spec: McpServerSpec, principal: Principal) -> tuple[ResourceVersionRecord | None, bool]:
+async def _published_connection(spec: McpServerSpec, principal: Principal) -> ResourceVersionRecord | None:
     definition = next((item for item in await registry.list_definitions(principal, ResourceType.MCP_CONNECTION) if item.slug == spec.slug), None)
     if definition is None:
-        return None, False
+        return None
     versions = await registry.list_versions(definition.resource_id, principal)
     published = [item for item in versions if item.status == ResourceVersionStatus.PUBLISHED]
     if not published:
         raise ApiError(409, "COMMON_MCP_CONFLICT", f"reserved MCP slug exists without a published version: {spec.slug}")
-    return max(published, key=lambda item: item.version_number), True
+    return max(published, key=lambda item: item.version_number)
 
 
 async def _ensure_connection(spec: McpServerSpec, principal: Principal) -> tuple[ResourceVersionRecord, str]:
-    found, existed = await _published_connection(spec, principal)
+    found = await _published_connection(spec, principal)
     if found:
         return found, "EXISTING"
     created = await create_mcp_connection(
