@@ -49,6 +49,12 @@ class MockIamProvider(IamProvider):
         items = [
             Subject(type="USER", external_id="user-demo", display_name="Demo User"),
             Subject(type="DEPT", external_id="dept-demo", display_name="Demo Department"),
+            Subject(type="ROLE", external_id="agent_admin", display_name="Agent Platform Administrator"),
         ]
-        filtered = [item for item in items if item.type == subject_type.upper() and query.lower() in item.display_name.lower()]
+        normalized = subject_type.upper()
+        needle = query.lower()
+        filtered = [
+            item for item in items
+            if item.type == normalized and (not needle or needle in item.display_name.lower() or needle in item.external_id.lower())
+        ]
         return SubjectPage(items=filtered[:limit])
