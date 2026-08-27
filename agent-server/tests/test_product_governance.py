@@ -109,8 +109,8 @@ def test_mcp_batch_product_command_creates_ruoyi_use_grant(monkeypatch: pytest.M
             }],
         })
         assert published.status_code == 201
-        version_id = published.json()[0]["resource_version_id"]
-        grants = client.get(f"/api/v1/resource-grants?resource_id={version_id}", headers=headers)
+        resource_id = published.json()[0]["resource_id"]
+        grants = client.get(f"/api/v1/resource-grants?resource_id={resource_id}", headers=headers)
         assert grants.status_code == 200
         dept = next(item for item in grants.json() if item["subject_type"] == "DEPT")
         assert dept["subject_id"] == "dept-hr-product-test"
@@ -149,8 +149,8 @@ def test_ragflow_product_command_creates_ruoyi_use_grant(monkeypatch: pytest.Mon
             **_product_payload(),
         })
         assert published.status_code == 201
-        version_id = published.json()["resource_version_id"]
-        grants = client.get(f"/api/v1/resource-grants?resource_id={version_id}", headers=headers)
+        resource_id = published.json()["resource_id"]
+        grants = client.get(f"/api/v1/resource-grants?resource_id={resource_id}", headers=headers)
         assert grants.status_code == 200
         assert any(item["subject_type"] == "DEPT" and item["subject_id"] == "dept-hr-product-test" for item in grants.json())
 
@@ -177,7 +177,7 @@ def test_http_tool_product_command_tests_then_creates_ruoyi_use_grant(monkeypatc
             **_product_payload(),
         })
         assert published.status_code == 201
-        version_id = published.json()["resource_version"]["resource_version_id"]
-        grants = client.get(f"/api/v1/resource-grants?resource_id={version_id}", headers=headers)
+        resource_id = published.json()["resource_version"]["resource_id"]
+        grants = client.get(f"/api/v1/resource-grants?resource_id={resource_id}", headers=headers)
         assert grants.status_code == 200
         assert any(item["subject_type"] == "DEPT" and set(item["actions"]) == {"VIEW", "USE"} for item in grants.json())
