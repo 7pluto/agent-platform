@@ -33,6 +33,7 @@ const emit = defineEmits<{
   saveDraft: []
   single: [field: string, versionId: string]
   many: [field: string, versionId: string]
+  replace: [field: string, fromVersionId: string, toVersionId: string]
   preflight: []
   publish: []
 }>()
@@ -55,9 +56,19 @@ function typeLabel(value: string) { return ({ MODEL: '模型', PROMPT: '提示�
     </div>
     <div class="table-card product-card"><table><thead><tr><th>智能体</th><th>Deployment</th><th>当前能力</th><th>Revision</th><th>最近运行</th><th /></tr></thead><tbody><tr v-for="item in agents" :key="item.deployment_id"><td><b>{{ item.display_name }}</b><small>{{ item.description || '—' }}</small></td><td>{{ item.deployment_name }}</td><td><div class="tag-list compact"><span v-for="(count, type) in item.capability_counts" :key="type">{{ count }} {{ typeLabel(type) }}</span></div></td><td>V{{ item.revision_number || '—' }}</td><td>{{ shortTime(item.last_run_at) }}</td><td class="row-actions"><button class="text-link" @click="emit('open', item)">配置</button><button class="text-link danger" @click="emit('delete', item)">删除</button></td></tr></tbody></table><p v-if="!loading && !agents.length" class="empty-copy">暂无符合条件的智能体。</p></div>
     <section v-if="detail && draft" class="builder product-card">
-      <header class="builder-header"><div><button class="text-link" @click="emit('closeBuilder')">‹ 返回列表</button><p class="eyebrow">CONFIGURE AGENT</p><h2>{{ agents.find(item => item.deployment_id === detail?.deployment_id)?.display_name || '智能体配置' }}</h2><p>基于 Revision {{ detail?.agent_version_number }} 创建配置草稿；发布后生成不可变新版本。</p></div><div><button class="button ghost" :disabled="saving" @click="emit('saveDraft')">{{ saving ? '保存中…' : '保存草稿' }}</button></div></header>
+      <header class="builder-header"><div><button class="text-link" @click="emit('closeBuilder')">‹ 返回列表</button><p class="eyebrow">CONFIGURE AGENT</p><h2>{{ agents.find(item => item.deployment_id === detail?.deployment_id)?.display_name || '智能体配置' }}</h2><p>基于 Revision {{ detail?.agent_version_number }} 创建配置草稿；资源版本只会在你显式选择后变化，发布后生成不可变新版本。</p></div><div><button class="button ghost" :disabled="saving" @click="emit('saveDraft')">{{ saving ? '保存中…' : '保存草稿' }}</button></div></header>
       <section class="agent-publication-policy"><div><p class="eyebrow">AVAILABILITY</p><h3>可用范围与运行授权</h3><p>选择谁可以看到、创建会话并运行此智能体。发布新 Revision 时范围立即生效。</p></div><PublicationScopePicker v-model:scope="publicationScope" v-model:subjects="publicationSubjects" :users="users" :departments="departments" :roles="roles" personal-label="仅发布人" /></section>
-      <AgentModuleBoard :catalog="catalog" :specification="draft.specification" :validation="validation" :publishing="publishing" @single="(field, id) => emit('single', field, id)" @many="(field, id) => emit('many', field, id)" @preflight="emit('preflight')" @publish="emit('publish')" />
+      <AgentModuleBoard
+        :catalog="catalog"
+        :specification="draft.specification"
+        :validation="validation"
+        :publishing="publishing"
+        @single="(field, id) => emit('single', field, id)"
+        @many="(field, id) => emit('many', field, id)"
+        @replace="(field, fromId, toId) => emit('replace', field, fromId, toId)"
+        @preflight="emit('preflight')"
+        @publish="emit('publish')"
+      />
     </section>
   </section>
 </template>
