@@ -49,8 +49,14 @@ class Settings(BaseSettings):
     session_cookie_name: str = "__Host-ap_session"
     session_cookie_secure: bool = True
     allow_direct_bearer: bool = False
+
+    # RuoYi roles/users mapped to platform control-plane responsibilities.
+    # Platform admins operate governance/infrastructure. Resource developers
+    # create tenant AI assets but receive no implicit VIEW/USE/RUN grants.
     platform_admin_role_codes: list[str] = Field(default_factory=lambda: ["agent_admin"])
     platform_admin_user_ids: list[str] = Field(default_factory=list)
+    resource_developer_role_codes: list[str] = Field(default_factory=lambda: ["agent_developer"])
+    resource_developer_user_ids: list[str] = Field(default_factory=list)
 
     runtime_execution_mode: Literal["disabled", "in_process", "worker"] = "in_process"
     worker_poll_interval_seconds: float = 0.5
