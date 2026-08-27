@@ -99,7 +99,7 @@ def _connection_governance(spec: McpServerSpec, principal: Principal) -> Product
         owner_user_id=principal.external_user_id,
         owner_dept_id=principal.dept_ids[0] if principal.dept_ids else None,
         one_line_summary=spec.description,
-        when_to_use="平台管理员需要发现该演示业务系统提供的 MCP Tool 时使用。",
+        when_to_use="平台需要发现或执行该演示 MCP Server 提供的 Tool 时使用。",
         when_not_to_use="Agent 不直接选择 Connection；应选择发现并纳管后的 Tool Resource。",
         input_summary="MCP Streamable HTTP 连接配置。",
         output_summary="可用于 tools/list 和 tools/call 的 MCP Connection。",
@@ -107,10 +107,13 @@ def _connection_governance(spec: McpServerSpec, principal: Principal) -> Product
         read_only=True,
         tags=["MCP", "DEMO", "connection", "common-resource"],
         business_line="通用演示",
-        audience="平台管理员",
-        usage_scenarios="MCP 能力发现与 Tool 纳管",
+        audience="Agent 开发者与平台管理员",
+        usage_scenarios="MCP 能力发现、Playground 测试与 Tool 运行",
         publication_scope="SELECTED_SUBJECTS",
-        publication_subjects=[PublicationSubject(subject_type=SubjectType.ROLE, subject_id="agent_admin")],
+        publication_subjects=[
+            PublicationSubject(subject_type=SubjectType.ROLE, subject_id="agent_developer"),
+            PublicationSubject(subject_type=SubjectType.ROLE, subject_id="agent_admin"),
+        ],
     )
 
 
