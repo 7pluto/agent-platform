@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 
-export interface VersionSnapshot {
+interface VersionSnapshot {
   version_id: string
   version_number: number
   content_hash: string
   config_preview: Record<string, unknown>
 }
-export interface UpgradeItem {
+interface UpgradeItem {
   dependency_type: 'TOOL' | 'KNOWLEDGE'
   resource_id: string
   display_name: string
@@ -18,7 +18,7 @@ export interface UpgradeItem {
   changed_fields: string[]
   message: string
 }
-export interface UpgradeReport {
+interface UpgradeReport {
   skill_resource_id: string
   skill_version_id: string
   skill_version_number: number
@@ -43,58 +43,39 @@ const report = ref<UpgradeReport | null>(null)
 const loading = ref(false)
 const error = ref('')
 const expanded = ref(new Set<string>())
-
 const pendingCount = computed(() => report.value?.dependencies.filter(item => item.upgrade_available && item.upgrade_allowed && !isLatestSelected(item)).length || 0)
 
-function selectedIds(type: 'TOOL' | 'KNOWLEDGE') {
-  return type === 'TOOL' ? props.toolVersionIds : props.knowledgeVersionIds
-}
-function isLatestSelected(item: UpgradeItem) {
-  return selectedIds(item.dependency_type).includes(item.latest.version_id)
-}
+function selectedIds(type: 'TOOL' | 'KNOWLEDGE') { return type === 'TOOL' ? props.toolVersionIds : props.knowledgeVersionIds }
+function isLatestSelected(item: UpgradeItem) { return selectedIds(item.dependency_type).includes(item.latest.version_id) }
 function isSelected(item: UpgradeItem) {
   const selected = selectedIds(item.dependency_type)
   return selected.includes(item.current.version_id) || selected.includes(item.latest.version_id)
 }
 function toggleDiff(item: UpgradeItem) {
   const next = new Set(expanded.value)
-  if (next.has(item.resource_id)) next.delete(item.resource_id)
-  else next.add(item.resource_id)
+  if (next.has(item.resource_id)) next.delete(item.resource_id); else next.add(item.resource_id)
   expanded.value = next
 }
 function shortHash(value: string) { return value.slice(0, 10) }
 function json(value: Record<string, unknown>) { return JSON.stringify(value, null, 2) }
 
 async function load() {
-  loading.value = true
-  error.value = ''
+  loading.value = true; error.value = ''
   try {
     const response = await fetch(`/api/v1/developer/resources/${props.resourceId}/dependency-upgrades`, { credentials: 'same-origin' })
     const payload = await response.json().catch(() => ({}))
     if (!response.ok) throw new Error(String(payload.message || payload.detail || payload.code || `HTTP ${response.status}`))
     report.value = payload as UpgradeReport
     emit('loaded', report.value)
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err)
-  } finally {
-    loading.value = false
-  }
+  } catch (err) { error.value = err instanceof Error ? err.message : String(err) }
+  finally { loading.value = false }
 }
-
 function chooseUpgrade(item: UpgradeItem) {
   if (!item.upgrade_available || !item.upgrade_allowed || isLatestSelected(item)) return
-  emit('upgrade', {
-    dependencyType: item.dependency_type,
-    fromVersionId: item.current.version_id,
-    toVersionId: item.latest.version_id,
-  })
+  emit('upgrade', { dependencyType: item.dependency_type, fromVersionId: item.current.version_id, toVersionId: item.latest.version_id })
 }
 function removeDependency(item: UpgradeItem) {
-  emit('remove', {
-    dependencyType: item.dependency_type,
-    currentVersionId: item.current.version_id,
-    latestVersionId: item.latest.version_id,
-  })
+  emit('remove', { dependencyType: item.dependency_type, currentVersionId: item.current.version_id, latestVersionId: item.latest.version_id })
 }
 
 watch(() => [props.resourceId, props.refreshSignal], () => void load())
@@ -103,55 +84,18 @@ onMounted(load)
 
 <template>
   <section class="upgrade-panel">
-    <header>
-      <div>
-        <span>DEPENDENCY VERSIONS</span>
-        <h4>依赖版本</h4>
-        <p>Skill 永远锁定具体 Published Version。这里可以查看差异、显式升级或移除依赖。</p>
-      </div>
-      <div class="upgrade-summary" :class="{ ready: pendingCount > 0 }">
-        <b>{{ pendingCount }}</b>
-        <small>项可升级</small>
-      </div>
-    </header>
-
-    <p v-if="error" class="panel-message error">{{ error }}</p>
-    <p v-else-if="loading" class="panel-message">正在检查依赖版本…</p>
-    <p v-else-if="!report?.dependencies.length" class="panel-message">当前 Skill 没有 Tool / Knowledge 依赖。</p>
-
+    <header><div><span>DEPENDENCY VERSIONS</span><h4>依赖版本</h4><p>Skill 永远锁定具体 Published Version。这里可以查看差异、显式升级或移除依赖。</p></div><div class="upgrade-summary" :class="{ ready: pendingCount > 0 }"><b>{{ pendingCount }}</b><small>项可升级</small></div></header>
+    <p v-if="error" class="panel-message error">{{ error }}</p><p v-else-if="loading" class="panel-message">正在检查依赖版本…</p><p v-else-if="!report?.dependencies.length" class="panel-message">当前 Skill 没有 Tool / Knowledge 依赖。</p>
     <div v-else class="upgrade-list">
       <article v-for="item in report.dependencies" :key="`${item.dependency_type}:${item.resource_id}`" class="upgrade-item" :class="{ removed: !isSelected(item) }">
         <div class="upgrade-main">
-          <div class="upgrade-name">
-            <span>{{ item.dependency_type === 'TOOL' ? 'Tool' : 'Knowledge' }}</span>
-            <div><b>{{ item.display_name }}</b><small>{{ isSelected(item) ? item.message : '已在当前编辑表单中移除，保存草稿后生效' }}</small></div>
-          </div>
-
-          <div class="version-route">
-            <div><small>当前锁定</small><b>V{{ item.current.version_number }}</b><code>{{ shortHash(item.current.content_hash) }}</code></div>
-            <span>→</span>
-            <div :class="{ latest: item.upgrade_available }"><small>最新发布</small><b>V{{ item.latest.version_number }}</b><code>{{ shortHash(item.latest.content_hash) }}</code></div>
-          </div>
-
-          <div class="upgrade-actions">
-            <button v-if="item.upgrade_available" class="diff-button" @click="toggleDiff(item)">{{ expanded.has(item.resource_id) ? '收起差异' : '查看差异' }}</button>
-            <span v-else class="latest-badge">已是最新</span>
-            <button v-if="item.upgrade_available && isSelected(item)" class="upgrade-button" :disabled="!item.upgrade_allowed || isLatestSelected(item)" @click="chooseUpgrade(item)">{{ isLatestSelected(item) ? `已选择 V${item.latest.version_number}` : item.upgrade_allowed ? `升级到 V${item.latest.version_number}` : '无 USE 权限' }}</button>
-            <button v-if="isSelected(item)" class="remove-button" @click="removeDependency(item)">移除</button>
-            <span v-else class="removed-badge">待移除</span>
-          </div>
+          <div class="upgrade-name"><span>{{ item.dependency_type === 'TOOL' ? 'Tool' : 'Knowledge' }}</span><div><b>{{ item.display_name }}</b><small>{{ isSelected(item) ? item.message : '已在当前编辑表单中移除，保存草稿后生效' }}</small></div></div>
+          <div class="version-route"><div><small>当前锁定</small><b>V{{ item.current.version_number }}</b><code>{{ shortHash(item.current.content_hash) }}</code></div><span>→</span><div :class="{ latest: item.upgrade_available }"><small>最新发布</small><b>V{{ item.latest.version_number }}</b><code>{{ shortHash(item.latest.content_hash) }}</code></div></div>
+          <div class="upgrade-actions"><button v-if="item.upgrade_available" class="diff-button" @click="toggleDiff(item)">{{ expanded.has(item.resource_id) ? '收起差异' : '查看差异' }}</button><span v-else class="latest-badge">已是最新</span><button v-if="item.upgrade_available && isSelected(item)" class="upgrade-button" :disabled="!item.upgrade_allowed || isLatestSelected(item)" @click="chooseUpgrade(item)">{{ isLatestSelected(item) ? `已选择 V${item.latest.version_number}` : item.upgrade_allowed ? `升级到 V${item.latest.version_number}` : '无 USE 权限' }}</button><button v-if="isSelected(item)" class="remove-button" @click="removeDependency(item)">移除</button><span v-else class="removed-badge">待移除</span></div>
         </div>
-
-        <div v-if="expanded.has(item.resource_id)" class="diff-area">
-          <div class="changed-fields"><b>变化字段</b><span v-for="field in item.changed_fields" :key="field">{{ field }}</span><small v-if="!item.changed_fields.length">内容哈希变化，但可展示结构字段无变化</small></div>
-          <div class="diff-columns">
-            <section><header>V{{ item.current.version_number }} 当前</header><pre>{{ json(item.current.config_preview) }}</pre></section>
-            <section><header>V{{ item.latest.version_number }} 最新</header><pre>{{ json(item.latest.config_preview) }}</pre></section>
-          </div>
-        </div>
+        <div v-if="expanded.has(item.resource_id)" class="diff-area"><div class="changed-fields"><b>变化字段</b><span v-for="field in item.changed_fields" :key="field">{{ field }}</span><small v-if="!item.changed_fields.length">内容哈希变化，但可展示结构字段无变化</small></div><div class="diff-columns"><section><header>V{{ item.current.version_number }} 当前</header><pre>{{ json(item.current.config_preview) }}</pre></section><section><header>V{{ item.latest.version_number }} 最新</header><pre>{{ json(item.latest.config_preview) }}</pre></section></div></div>
       </article>
     </div>
-
     <footer v-if="report?.dependencies.length">升级或移除都只修改当前编辑表单；点击“保存草稿”后才写入 Skill Draft。</footer>
   </section>
 </template>
