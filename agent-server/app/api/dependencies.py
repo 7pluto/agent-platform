@@ -86,11 +86,7 @@ async def require_fresh_mutation_principal(
     authorization: str | None = Header(default=None),
     csrf_token: str | None = Header(default=None, alias="X-CSRF-Token"),
 ) -> Principal:
-    """Require an anti-CSRF token for cookie-authenticated state changes.
-
-    Direct bearer is only a development compatibility path and deliberately does
-    not create a browser cookie, so it is not subject to the cookie CSRF check.
-    """
+    """Require an anti-CSRF token for cookie-authenticated state changes."""
     record, token = await _load_session(request, ap_session, authorization)
     session_id = ap_session or request.cookies.get(get_settings().session_cookie_name)
     if session_id and csrf_token != record.csrf_token:
@@ -105,6 +101,15 @@ def is_platform_admin(principal: Principal) -> bool:
     settings = get_settings()
     return principal.external_user_id in settings.platform_admin_user_ids or bool(
         set(principal.role_codes) & set(settings.platform_admin_role_codes)
+    )
+
+
+def is_resource_developer(principal: Principal) -> bool:
+    settings = get_settings()
+    return (
+        is_platform_admin(principal)
+        or principal.external_user_id in settings.resource_developer_user_ids
+        or bool(set(principal.role_codes) & set(settings.resource_developer_role_codes))
     )
 
 
@@ -125,10 +130,32 @@ async def require_platform_admin_read(
     ap_session: str | None = Cookie(default=None, alias="__Host-ap_session"),
     authorization: str | None = Header(default=None),
 ) -> Principal:
-    """Require fresh admin identity for GET requests without mutation-only CSRF."""
     principal = await require_fresh_principal(request, ap_session, authorization)
     if not is_platform_admin(principal):
         raise ApiError(403, "PLATFORM_ADMIN_REQUIRED", "platform administrator role is required")
+    return principal
+
+
+async def require_resource_developer(
+    request: Request,
+    ap_session: str | None = Cookie(default=None, alias="__Host-ap_session"),
+    authorization: str | None = Header(default=None),
+    csrf_token: str | None = Header(default=None, alias="X-CSRF-Token"),
+) -> Principal:
+    principal = await require_fresh_mutation_principal(request, ap_session, authorization, csrf_token)
+    if not is_resource_developer(principal):
+        raise ApiError(403, "RESOURCE_DEVELOPER_REQUIRED", "resource developer role is required")
+    return principal
+
+
+async def require_resource_developer_read(
+    request: Request,
+    ap_session: str | None = Cookie(default=None, alias="__Host-ap_session"),
+    authorization: str | None = Header(default=None),
+) -> Principal:
+    principal = await require_fresh_principal(request, ap_session, authorization)
+    if not is_resource_developer(principal):
+        raise ApiError(403, "RESOURCE_DEVELOPER_REQUIRED", "resource developer role is required")
     return principal
 
 
@@ -169,13 +196,7 @@ async def _definition_resource_id(
 
 
 async def ensure_resource_action(principal: Principal, action: str, resource_type: str, resource_id: str) -> None:
-    """Authorize one business-resource action without an admin super-user bypass.
-
-    Platform-admin status controls governance/configuration endpoints; it does
-    not implicitly grant VIEW/USE/RUN on tenant business resources. Existing
-    version-scoped grants remain valid while stable definition-scoped grants are
-    also accepted for versioned AI resources.
-    """
+    """Authorize a business-resource action without an admin USE/RUN bypass."""
     governance = get_governance_store()
     if await governance.is_allowed(principal, action, resource_type, resource_id):
         return
@@ -203,8 +224,6 @@ async def ensure_resource_action(principal: Principal, action: str, resource_typ
                 if owner == principal.external_user_id:
                     return
 
-    # Platform operators may repair lifecycle/governance metadata, but becoming
-    # an administrator must never confer business visibility, use, or run rights.
     if is_platform_admin(principal) and action in {"EDIT", "PUBLISH", "MANAGE"}:
         return
 
