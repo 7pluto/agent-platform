@@ -33,11 +33,18 @@ const emit = defineEmits<{
   saveDraft: []
   single: [field: string, versionId: string]
   many: [field: string, versionId: string]
-  replace: [field: string, fromVersionId: string, toVersionId: string]
   preflight: []
   publish: []
 }>()
 
+function forwardVersionReplace(field: string, fromVersionId: string, toVersionId: string) {
+  if (field.endsWith('_ids')) {
+    emit('many', field, fromVersionId)
+    emit('many', field, toVersionId)
+  } else {
+    emit('single', field, toVersionId)
+  }
+}
 function shortTime(value?: string) { if (!value) return '暂无'; const date = new Date(value); return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false }) }
 function typeLabel(value: string) { return ({ MODEL: '模型', PROMPT: '提示词', SKILL: '技能', TOOL: '工具', KNOWLEDGE: '知识库', MEMORY_POLICY: '记忆' } as Record<string, string>)[value] || value }
 </script>
@@ -65,7 +72,7 @@ function typeLabel(value: string) { return ({ MODEL: '模型', PROMPT: '提示�
         :publishing="publishing"
         @single="(field, id) => emit('single', field, id)"
         @many="(field, id) => emit('many', field, id)"
-        @replace="(field, fromId, toId) => emit('replace', field, fromId, toId)"
+        @replace="forwardVersionReplace"
         @preflight="emit('preflight')"
         @publish="emit('publish')"
       />
