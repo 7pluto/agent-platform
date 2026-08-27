@@ -150,3 +150,98 @@ def test_ruoyi_developer_can_publish_owned_skill_but_admin_needs_explicit_busine
         admin_available_after = client.get("/api/v1/developer/resources/available")
         assert admin_available_after.status_code == 200, admin_available_after.text
         assert tool_payload["resource_id"] in {item["resource_id"] for item in admin_available_after.json()}
+
+
+def test_developer_resource_edit_creates_draft_and_publishes_new_immutable_version() -> None:
+    with TestClient(app, base_url="https://testserver") as client:
+        _, headers = _exchange(client, "dev-developer-ticket")
+        created = client.post(
+            "/api/v1/developer/resources/prompts",
+            headers=headers,
+            json={
+                "slug": "version-lifecycle-prompt",
+                "display_name": "版本演进 Prompt",
+                "description": "用于验证开发者版本工作流",
+                "template": "你是 V1 助手。",
+                **_semantics("V1：提供基础业务回答规则"),
+            },
+        )
+        assert created.status_code == 201, created.text
+        v1 = created.json()
+        resource_id = v1["resource_id"]
+
+        detail = client.get(f"/api/v1/developer/resources/{resource_id}")
+        assert detail.status_code == 200, detail.text
+        initial = detail.json()
+        assert initial["editable"] is True
+        assert initial["active_draft_version_id"] is None
+        assert initial["editable_config"]["template"] == "你是 V1 助手。"
+        assert [(item["version_number"], item["status"]) for item in initial["versions"]] == [(1, "PUBLISHED")]
+
+        draft = client.post(
+            f"/api/v1/developer/resources/{resource_id}/versions",
+            headers=headers,
+            json={
+                "config": {"template": "你是 V2 草稿助手。"},
+                **_semantics("V2：增加更清晰的业务回答规则"),
+            },
+        )
+        assert draft.status_code == 201, draft.text
+        v2_draft = draft.json()
+        assert v2_draft["version_number"] == 2
+        assert v2_draft["status"] == "DRAFT"
+
+        duplicate_draft = client.post(
+            f"/api/v1/developer/resources/{resource_id}/versions",
+            headers=headers,
+            json={
+                "config": {"template": "不应创建 V3。"},
+                **_semantics("重复 Draft"),
+            },
+        )
+        assert duplicate_draft.status_code == 409
+        assert duplicate_draft.json()["code"] == "RESOURCE_DRAFT_EXISTS"
+
+        updated = client.put(
+            f"/api/v1/developer/resources/{resource_id}/versions/{v2_draft['resource_version_id']}",
+            headers=headers,
+            json={
+                "config": {"template": "你是最终 V2 助手。"},
+                **_semantics("V2：最终业务回答规则"),
+            },
+        )
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["status"] == "DRAFT"
+        assert updated.json()["config"]["template"] == "你是最终 V2 助手。"
+
+        before_publish = client.get(f"/api/v1/developer/resources/{resource_id}").json()
+        versions_before = {item["version_number"]: item for item in before_publish["versions"]}
+        assert versions_before[1]["status"] == "PUBLISHED"
+        assert versions_before[1]["config"]["template"] == "你是 V1 助手。"
+        assert versions_before[2]["status"] == "DRAFT"
+        assert versions_before[2]["config"]["template"] == "你是最终 V2 助手。"
+
+        published = client.post(
+            f"/api/v1/developer/resources/{resource_id}/versions/{v2_draft['resource_version_id']}/publish",
+            headers=headers,
+        )
+        assert published.status_code == 200, published.text
+        assert published.json()["version_number"] == 2
+        assert published.json()["status"] == "PUBLISHED"
+
+        final_detail = client.get(f"/api/v1/developer/resources/{resource_id}")
+        assert final_detail.status_code == 200, final_detail.text
+        final_payload = final_detail.json()
+        assert final_payload["active_draft_version_id"] is None
+        final_versions = {item["version_number"]: item for item in final_payload["versions"]}
+        assert final_versions[1]["status"] == "PUBLISHED"
+        assert final_versions[1]["config"]["template"] == "你是 V1 助手。"
+        assert final_versions[2]["status"] == "PUBLISHED"
+        assert final_versions[2]["config"]["template"] == "你是最终 V2 助手。"
+        assert final_versions[1]["content_hash"] != final_versions[2]["content_hash"]
+
+        mine = client.get("/api/v1/developer/resources/mine")
+        assert mine.status_code == 200, mine.text
+        current = next(item for item in mine.json() if item["resource_id"] == resource_id)
+        assert current["version_number"] == 2
+        assert current["one_line_summary"] == "V2：最终业务回答规则"
