@@ -20,8 +20,7 @@ from app.resources.registry_models import (
     ResourceVersionStatus,
 )
 from app.resources.registry_store import ResourceRegistryStore
-from app.governance.store_factory import get_governance_store
-from app.api.dependencies import ensure_resource_action, is_platform_admin
+from app.api.dependencies import ensure_resource_action
 
 
 class PostgresResourceRegistryStore:
@@ -71,6 +70,12 @@ class PostgresResourceRegistryStore:
                 return [self._version(row) for row in rows.all()]
 
     async def list_published_versions(self, principal: Principal, resource_type: ResourceType | None = None) -> list[ResourceVersionRecord]:
+        """Return only published versions the current RuoYi subject may USE.
+
+        Platform administrators deliberately do not bypass business-resource
+        grants here. Admin status governs platform operations; ResourceGrant
+        governs whether a capability can be assembled into an Agent.
+        """
         async with self._session() as session:
             async with session.begin():
                 await self._context(session, principal)
@@ -79,15 +84,14 @@ class PostgresResourceRegistryStore:
                     statement = statement.where(ResourceVersionRow.resource_type == resource_type.value)
                 rows = await session.scalars(statement.order_by(ResourceVersionRow.resource_type, ResourceVersionRow.resource_id, ResourceVersionRow.version_number))
                 candidates = [self._version(row) for row in rows.all()]
-        if is_platform_admin(principal):
-            return candidates
         visible: list[ResourceVersionRecord] = []
         for item in candidates:
             try:
                 await ensure_resource_action(principal, "USE", item.resource_type.value, str(item.resource_version_id))
                 visible.append(item)
-            except ApiError:
-                pass
+            except ApiError as exc:
+                if exc.code != "RESOURCE_FORBIDDEN":
+                    raise
         return visible
 
     async def get_version(self, resource_version_id: UUID, principal: Principal, published: bool = False) -> ResourceVersionRecord:
