@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import type { CatalogItem, IamSubject, Principal, ResourceListItem } from '../../api'
 import ResourceOnboardingWizard from '../../features/resource-onboarding/ResourceOnboardingWizard.vue'
 
@@ -37,6 +38,9 @@ const resourceWizardStep = defineModel<number>('resourceWizardStep', { required:
 const resourceCategory = defineModel<ResourceCategory>('resourceCategory', { required: true })
 const resourceForm = defineModel<ResourceForm>('resourceForm', { required: true })
 const ragflowDatasets = defineModel<RagflowDataset[]>('ragflowDatasets', { required: true })
+const installingCommon = ref(false)
+const commonNotice = ref('')
+const commonError = ref('')
 
 const resourceRole = (type: string) => ({
   MODEL: '负责理解问题、推理以及决定是否调用工具。',
@@ -53,6 +57,29 @@ const typeGuides = [
   { type: 'TOOL', title: 'Tool', question: '它能实际做什么？', description: '查询系统、调用接口或执行确定性动作。' },
   { type: 'MEMORY_POLICY', title: 'Memory', question: '它应该记住什么？', description: '控制跨会话长期记忆策略。' },
 ]
+
+async function installCommonResources() {
+  if (installingCommon.value) return
+  installingCommon.value = true
+  commonNotice.value = ''
+  commonError.value = ''
+  try {
+    const sessionResponse = await fetch('/api/v1/auth/session', { credentials: 'same-origin' })
+    if (!sessionResponse.ok) throw new Error('登录会话已失效')
+    const session = await sessionResponse.json() as { csrf_token: string }
+    const response = await fetch('/api/v1/developer/resources/common/install', {
+      method: 'POST', credentials: 'same-origin', headers: { 'X-CSRF-Token': session.csrf_token },
+    })
+    const payload = await response.json().catch(() => ({})) as { created?: number; existing?: number; message?: string; detail?: string }
+    if (!response.ok) throw new Error(payload.message || payload.detail || `HTTP ${response.status}`)
+    commonNotice.value = `常用资源已就绪：新增 ${payload.created || 0}，已有 ${payload.existing || 0}`
+    window.setTimeout(() => window.location.reload(), 800)
+  } catch (err) {
+    commonError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    installingCommon.value = false
+  }
+}
 </script>
 
 <template>
@@ -63,8 +90,13 @@ const typeGuides = [
 <h1>能力中心</h1>
 <p>这里放的是“可以组装进 Agent 的能力”。MCP、Dify 等只是能力来源，最终应纳管成 Tool 或 Knowledge 后再参与组装。</p>
 </div>
+<div class="capability-actions">
+<button class="button ghost" :disabled="installingCommon" @click="installCommonResources">{{ installingCommon ? '正在添加…' : '添加常用资源' }}</button>
 <button class="button primary" @click="openResourceWizard">＋ 创建 / 接入资源</button>
 </div>
+</div>
+<p v-if="commonNotice" class="common-message success">{{ commonNotice }}</p>
+<p v-if="commonError" class="common-message error">{{ commonError }}</p>
 
 <section class="capability-type-guide" aria-label="资源类型说明">
 <article v-for="guide in typeGuides" :key="guide.type" :class="{ active: resourceType === guide.type }" @click="resourceType = resourceType === guide.type ? 'ALL' : guide.type">
@@ -134,7 +166,7 @@ const typeGuides = [
 </template>
 
 <style scoped>
-.capability-type-guide { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:10px; margin-bottom:16px; }
+.capability-actions{display:flex;gap:8px;align-items:center}.common-message{margin:-6px 0 14px;padding:9px 12px;border-radius:9px;font-size:12px}.common-message.success{background:#ecfdf3;color:#067647}.common-message.error{background:#fef3f2;color:#b42318}.capability-type-guide { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:10px; margin-bottom:16px; }
 .capability-type-guide article { padding:14px; border:1px solid #e4e7ec; border-radius:13px; background:#fff; cursor:pointer; transition:.15s ease; }
 .capability-type-guide article:hover,.capability-type-guide article.active { border-color:#8b7cf6; background:#f8f7ff; }
 .capability-type-guide span { color:#6958e8; font-size:12px; font-weight:800; }
@@ -143,5 +175,5 @@ const typeGuides = [
 .resource-business-description { margin-bottom:8px; }
 .resource-role-copy { margin:0; padding:9px 10px; border-radius:9px; background:#f8f9fc; color:#475467 !important; font-size:12px; line-height:1.5; }
 @media (max-width:1100px){.capability-type-guide{grid-template-columns:repeat(2,minmax(0,1fr));}}
-@media (max-width:640px){.capability-type-guide{grid-template-columns:1fr;}}
+@media (max-width:640px){.capability-type-guide{grid-template-columns:1fr}.capability-actions{align-items:stretch;flex-direction:column}.capability-actions button{width:100%}}
 </style>
