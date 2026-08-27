@@ -6,7 +6,12 @@ from uuid import UUID
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
-from app.api.dependencies import ensure_resource_action, require_resource_developer
+from app.api.dependencies import (
+    ensure_resource_action,
+    require_resource_developer,
+    require_resource_developer_read,
+)
+from app.api.routes.workbench import CatalogItem, _catalog
 from app.core.errors import ApiError
 from app.governance.store_factory import get_governance_store
 from app.iam.models import Principal
@@ -22,6 +27,14 @@ from app.resources.registry_models import (
 
 router = APIRouter(prefix="/developer/resources", tags=["developer-resources"])
 store = get_resource_registry()
+
+
+class DeveloperContext(BaseModel):
+    developer: bool = True
+    external_user_id: str
+    display_name: str
+    role_codes: list[str] = Field(default_factory=list)
+    dept_ids: list[str] = Field(default_factory=list)
 
 
 class ResourceSemantics(BaseModel):
@@ -87,6 +100,15 @@ def _governance(product: ResourceSemantics, principal: Principal) -> ProductGove
     )
 
 
+def _latest_per_resource(items: list[CatalogItem]) -> list[CatalogItem]:
+    latest: dict[UUID, CatalogItem] = {}
+    for item in items:
+        current = latest.get(item.resource_id)
+        if current is None or item.version_number > current.version_number:
+            latest[item.resource_id] = item
+    return sorted(latest.values(), key=lambda item: (item.resource_type, item.display_name.lower()))
+
+
 async def _publish(
     *,
     resource_type: ResourceType,
@@ -132,6 +154,44 @@ async def _publish(
         },
     )
     return published
+
+
+@router.get("/context", response_model=DeveloperContext)
+async def developer_context(
+    principal: Principal = Depends(require_resource_developer_read),
+) -> DeveloperContext:
+    return DeveloperContext(
+        external_user_id=principal.external_user_id,
+        display_name=principal.display_name,
+        role_codes=list(principal.role_codes),
+        dept_ids=list(principal.dept_ids),
+    )
+
+
+@router.get("/mine", response_model=list[CatalogItem])
+async def my_resources(
+    principal: Principal = Depends(require_resource_developer_read),
+) -> list[CatalogItem]:
+    catalog = await _catalog(principal)
+    return _latest_per_resource([
+        item for item in catalog if item.owner_user_id == principal.external_user_id
+    ])
+
+
+@router.get("/available", response_model=list[CatalogItem])
+async def available_resources(
+    principal: Principal = Depends(require_resource_developer_read),
+) -> list[CatalogItem]:
+    allowed: list[CatalogItem] = []
+    for item in await _catalog(principal):
+        try:
+            await ensure_resource_action(principal, "USE", item.resource_type, str(item.version_id))
+        except ApiError as exc:
+            if exc.code == "RESOURCE_FORBIDDEN":
+                continue
+            raise
+        allowed.append(item)
+    return _latest_per_resource(allowed)
 
 
 @router.post("/prompts", response_model=ResourceVersionRecord, status_code=201)
