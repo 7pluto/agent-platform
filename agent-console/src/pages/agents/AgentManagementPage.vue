@@ -90,6 +90,7 @@ function scopeLabel(value: string) { return ({ PERSONAL: '仅发布人', OWNER_D
 
       <AgentRevisionCompare
         :deployment-id="detail.deployment_id"
+        :active-revision-id="detail.active_revision_id"
         :users="users"
         :departments="departments"
         :roles="roles"
