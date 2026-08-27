@@ -46,7 +46,7 @@ async function load() {
   try {
     const [items, modelItems] = await Promise.all([
       request<CatalogItem[]>('/api/v1/developer/resources/available'),
-      request<ModelOption[]>('/api/v1/developer/external/models'),
+      request<ModelOption[]>('/api/v1/developer/external/models/chat'),
     ])
     resources.value = items; models.value = modelItems
     if (!selected.value && playable.value.length) choose(playable.value[0])
@@ -86,11 +86,11 @@ onMounted(load)
         <section v-if="selected" class="runner">
           <div class="resource-head"><div><span>{{typeLabel(selected.resource_type)}} · {{sourceLabel(selected.source_type)}} · V{{selected.version_number}}</span><h2>{{selected.display_name}}</h2><p>{{selected.one_line_summary}}</p></div><div class="badges"><i>{{selected.risk_level}}</i><i>{{selected.read_only?'READ ONLY':'WRITE'}}</i></div></div>
           <div class="contract"><article><small>何时使用</small><p>{{selected.when_to_use||'未填写'}}</p></article><article><small>输入契约</small><p>{{selected.input_summary||'按资源定义提供输入。'}}</p></article><article><small>输出契约</small><p>{{selected.output_summary||'返回资源定义的结果。'}}</p></article></div>
-          <section class="test-form"><div class="section-title"><span>01</span><div><b>测试输入</b><small v-if="selected.resource_type==='TOOL'">直接执行 Tool；MCP / HTTP / Dify 都会触发真实上游调用。</small><small v-else-if="selected.resource_type==='KNOWLEDGE'">直接执行检索，不经过 Agent。</small><small v-else>选择 Model 后真实执行；不选 Model 时返回 Prompt / Skill Preview。</small></div></div>
+          <section class="test-form"><div class="section-title"><span>01</span><div><b>测试输入</b><small v-if="selected.resource_type==='TOOL'">直接执行 Tool；MCP / HTTP / Dify 都会触发真实上游调用。</small><small v-else-if="selected.resource_type==='KNOWLEDGE'">直接执行检索，不经过 Agent。</small><small v-else>选择 Chat Model 后真实执行；不选 Model 时返回 Prompt / Skill Preview。</small></div></div>
             <label v-if="needsMessage">{{selected.resource_type==='KNOWLEDGE'?'检索问题':'测试问题'}}<textarea v-model="message" rows="5" :placeholder="selected.resource_type==='KNOWLEDGE'?'例如：公司的报销流程是什么？':'输入一个真实业务问题'"/></label>
             <label v-if="selected.resource_type==='TOOL'" class="code">Arguments JSON<textarea v-model="argumentsText" rows="10" placeholder="{}"/></label>
             <label v-if="selected.resource_type==='KNOWLEDGE'">Top K<input v-model.number="topK" type="number" min="1" max="10"/></label>
-            <label v-if="needsModel">测试 Model<select v-model="modelVersionId"><option value="">不调用模型，只预览</option><option v-for="model in models" :key="model.model_version_id" :value="model.model_version_id">{{model.display_name}} · V{{model.version_number}} · {{model.model_name}}</option></select><small v-if="!models.length">当前账号没有被授权的可用 Model，因此只能预览 Prompt / Skill。</small></label>
+            <label v-if="needsModel">测试 Chat Model<select v-model="modelVersionId"><option value="">不调用模型，只预览</option><option v-for="model in models" :key="model.model_version_id" :value="model.model_version_id">{{model.display_name}} · V{{model.version_number}} · {{model.model_name}}</option></select><small v-if="!models.length">当前账号没有被授权的可用 Chat Model，因此只能预览 Prompt / Skill。</small></label>
             <button class="run" :disabled="running" @click="run">{{running?'正在执行…':'▶ 运行测试'}}</button>
           </section>
           <section v-if="result" class="result"><div class="result-head"><div><span>02</span><div><b>测试结果</b><small>{{result.kind}} · {{result.mode}} · {{result.elapsed_ms}} ms</small></div></div><i>SUCCESS</i></div><pre>{{pretty(result.output)}}</pre><template v-if="result.tool_calls.length"><h3>Skill Tool Trace</h3><article v-for="(call,index) in result.tool_calls" :key="`${call.name}-${index}`"><b>{{index+1}}. {{call.name}}</b><small>Arguments</small><pre>{{pretty(call.arguments)}}</pre><small>Output</small><pre>{{pretty(call.output)}}</pre></article></template><details v-if="Object.keys(result.metadata||{}).length"><summary>Metadata</summary><pre>{{pretty(result.metadata)}}</pre></details></section>
