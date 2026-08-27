@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     ruoyi_dept_path: str = "/agent-iam/departments"
     ruoyi_sub_dept_path: str = "/agent-iam/departments"
     ruoyi_user_search_path: str = "/agent-iam/users"
+    ruoyi_role_search_path: str = "/agent-iam/roles"
     ruoyi_default_org_id: str = "ruoyi-default"
     ruoyi_timeout_seconds: float = 5.0
     ruoyi_verify_tls: bool = True
@@ -55,7 +56,6 @@ class Settings(BaseSettings):
     worker_poll_interval_seconds: float = 0.5
     worker_id: str = "agent-worker-1"
     runtime_harness: Literal["mock", "langgraph_baseline"] = "mock"
-    # Qwen/SiliconFlow cold starts and tool-aware responses can exceed one minute.
     model_request_timeout_seconds: float = 180.0
     minio_endpoint: str = "http://localhost:9000"
     minio_bucket: str = "agent-platform"
