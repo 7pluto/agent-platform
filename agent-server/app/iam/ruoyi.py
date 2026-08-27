@@ -122,7 +122,7 @@ class RuoYiIamProvider(IamProvider):
             params = {"name": query, "limit": str(limit)}
         elif subject_type == "ROLE":
             path = self.settings.ruoyi_role_search_path
-            params = {"name": query, "limit": str(limit)}
+            params = {"roleName": query, "pageNum": "1", "pageSize": str(limit)}
         else:
             return SubjectPage(items=[])
         try:
@@ -140,6 +140,10 @@ class RuoYiIamProvider(IamProvider):
             items = raw.get("items") or raw.get("rows") or raw.get("records") or []
         else:
             items = []
+        # Standard RuoYi list endpoints keep rows at the response top level
+        # rather than inside data; support both shapes without a Java change.
+        if not items and isinstance(payload.get("rows"), list):
+            items = payload["rows"]
         return SubjectPage(
             items=[self._parse_subject(item, subject_type) for item in items[:limit]],
             next_cursor=None,
