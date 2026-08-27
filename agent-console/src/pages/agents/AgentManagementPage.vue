@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import type { AgentWorkbenchItem, CatalogItem, ConfigurationDraft, ConfigurationValidation, DeploymentCapabilities, IamSubject } from '../../api'
 import AgentModuleBoard from '../../components/AgentModuleBoard.vue'
+import AgentReleaseChangeList from '../../components/AgentReleaseChangeList.vue'
 import PublicationScopePicker from '../../features/permissions/PublicationScopePicker.vue'
 
 defineProps<{
@@ -23,6 +25,7 @@ const creatorOpen = defineModel<boolean>('creatorOpen', { required: true })
 const createForm = defineModel<{ displayName: string; description: string; deploymentName: string }>('createForm', { required: true })
 const publicationScope = defineModel<'PERSONAL' | 'OWNER_DEPT' | 'SELECTED_SUBJECTS'>('publicationScope', { required: true })
 const publicationSubjects = defineModel<string[]>('publicationSubjects', { required: true })
+const publishConfirmOpen = ref(false)
 
 const emit = defineEmits<{
   openCreator: []
@@ -45,8 +48,14 @@ function forwardVersionReplace(field: string, fromVersionId: string, toVersionId
     emit('single', field, toVersionId)
   }
 }
+function requestPublish() { publishConfirmOpen.value = true }
+function confirmPublish() {
+  publishConfirmOpen.value = false
+  emit('publish')
+}
 function shortTime(value?: string) { if (!value) return '暂无'; const date = new Date(value); return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false }) }
 function typeLabel(value: string) { return ({ MODEL: '模型', PROMPT: '提示词', SKILL: '技能', TOOL: '工具', KNOWLEDGE: '知识库', MEMORY_POLICY: '记忆' } as Record<string, string>)[value] || value }
+function scopeLabel(value: string) { return ({ PERSONAL: '仅发布人', OWNER_DEPT: '责任部门', SELECTED_SUBJECTS: '指定 RuoYi 主体' } as Record<string, string>)[value] || value }
 </script>
 
 <template>
@@ -62,6 +71,7 @@ function typeLabel(value: string) { return ({ MODEL: '模型', PROMPT: '提示�
       </section>
     </div>
     <div class="table-card product-card"><table><thead><tr><th>智能体</th><th>Deployment</th><th>当前能力</th><th>Revision</th><th>最近运行</th><th /></tr></thead><tbody><tr v-for="item in agents" :key="item.deployment_id"><td><b>{{ item.display_name }}</b><small>{{ item.description || '—' }}</small></td><td>{{ item.deployment_name }}</td><td><div class="tag-list compact"><span v-for="(count, type) in item.capability_counts" :key="type">{{ count }} {{ typeLabel(type) }}</span></div></td><td>V{{ item.revision_number || '—' }}</td><td>{{ shortTime(item.last_run_at) }}</td><td class="row-actions"><button class="text-link" @click="emit('open', item)">配置</button><button class="text-link danger" @click="emit('delete', item)">删除</button></td></tr></tbody></table><p v-if="!loading && !agents.length" class="empty-copy">暂无符合条件的智能体。</p></div>
+
     <section v-if="detail && draft" class="builder product-card">
       <header class="builder-header"><div><button class="text-link" @click="emit('closeBuilder')">‹ 返回列表</button><p class="eyebrow">CONFIGURE AGENT</p><h2>{{ agents.find(item => item.deployment_id === detail?.deployment_id)?.display_name || '智能体配置' }}</h2><p>基于 Revision {{ detail?.agent_version_number }} 创建配置草稿；资源版本只会在你显式选择后变化，发布后生成不可变新版本。</p></div><div><button class="button ghost" :disabled="saving" @click="emit('saveDraft')">{{ saving ? '保存中…' : '保存草稿' }}</button></div></header>
       <section class="agent-publication-policy"><div><p class="eyebrow">AVAILABILITY</p><h3>可用范围与运行授权</h3><p>选择谁可以看到、创建会话并运行此智能体。发布新 Revision 时范围立即生效。</p></div><PublicationScopePicker v-model:scope="publicationScope" v-model:subjects="publicationSubjects" :users="users" :departments="departments" :roles="roles" personal-label="仅发布人" /></section>
@@ -74,8 +84,34 @@ function typeLabel(value: string) { return ({ MODEL: '模型', PROMPT: '提示�
         @many="(field, id) => emit('many', field, id)"
         @replace="forwardVersionReplace"
         @preflight="emit('preflight')"
-        @publish="emit('publish')"
+        @publish="requestPublish"
       />
     </section>
+
+    <div v-if="publishConfirmOpen && detail && draft && validation" class="modal-backdrop release-confirm-backdrop" @click.self="publishConfirmOpen = false">
+      <section class="release-confirm" role="dialog" aria-modal="true" aria-label="确认发布智能体版本">
+        <header>
+          <div><p class="eyebrow">CONFIRM RELEASE</p><h2>确认发布新的 Agent Version / Revision</h2><p>发布后不会覆盖当前 Revision。请先确认资源版本变化和由 Skill 带来的依赖变化。</p></div>
+          <button class="icon-button" aria-label="关闭" @click="publishConfirmOpen = false">×</button>
+        </header>
+
+        <AgentReleaseChangeList :catalog="catalog" :baseline="detail.capabilities" :specification="draft.specification" :validation="validation" />
+
+        <section class="release-audience-summary">
+          <div><small>当前 Agent Version</small><b>V{{ detail.agent_version_number }}</b><span>发布后生成新的不可变版本</span></div>
+          <div><small>运行授权范围</small><b>{{ scopeLabel(publicationScope) }}</b><span>{{ publicationScope === 'SELECTED_SUBJECTS' ? `${publicationSubjects.length} 个指定主体` : '随本次 Revision 一起生效' }}</span></div>
+          <div><small>预检结果</small><b>{{ validation.valid ? '通过' : '阻塞' }}</b><span>{{ validation.warnings.length }} 条提醒</span></div>
+        </section>
+
+        <footer>
+          <button class="button ghost" @click="publishConfirmOpen = false">返回继续修改</button>
+          <button class="button primary" :disabled="publishing || !validation.valid" @click="confirmPublish">{{ publishing ? '发布中…' : '确认并发布新 Revision' }}</button>
+        </footer>
+      </section>
+    </div>
   </section>
 </template>
+
+<style scoped>
+.release-confirm-backdrop{z-index:60}.release-confirm{display:grid;gap:16px;width:min(1080px,94vw);max-height:92vh;overflow:auto;padding:20px;border-radius:18px;background:#fff;box-shadow:0 24px 80px rgba(16,24,40,.2)}.release-confirm>header{display:flex;justify-content:space-between;gap:16px}.release-confirm>header h2{margin:4px 0}.release-confirm>header p:last-child{margin:0;color:#667085}.release-audience-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.release-audience-summary>div{display:grid;gap:4px;padding:12px;border:1px solid #e4e7ec;border-radius:12px;background:#f9fafb}.release-audience-summary small,.release-audience-summary span{color:#667085;font-size:10px}.release-audience-summary b{font-size:13px}.release-confirm>footer{display:flex;justify-content:flex-end;gap:10px;padding-top:4px}@media(max-width:800px){.release-audience-summary{grid-template-columns:1fr}.release-confirm>footer{flex-direction:column-reverse}.release-confirm>footer button{width:100%}}
+</style>
