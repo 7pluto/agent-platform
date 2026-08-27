@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 
-interface VersionSnapshot {
+export interface VersionSnapshot {
   version_id: string
   version_number: number
   content_hash: string
   config_preview: Record<string, unknown>
 }
-interface UpgradeItem {
+export interface UpgradeItem {
   dependency_type: 'TOOL' | 'KNOWLEDGE'
   resource_id: string
   display_name: string
@@ -18,7 +18,7 @@ interface UpgradeItem {
   changed_fields: string[]
   message: string
 }
-interface UpgradeReport {
+export interface UpgradeReport {
   skill_resource_id: string
   skill_version_id: string
   skill_version_number: number
@@ -35,6 +35,7 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{
   upgrade: [payload: { dependencyType: 'TOOL' | 'KNOWLEDGE'; fromVersionId: string; toVersionId: string }]
+  loaded: [report: UpgradeReport]
 }>()
 
 const report = ref<UpgradeReport | null>(null)
@@ -67,6 +68,7 @@ async function load() {
     const payload = await response.json().catch(() => ({}))
     if (!response.ok) throw new Error(String(payload.message || payload.detail || payload.code || `HTTP ${response.status}`))
     report.value = payload as UpgradeReport
+    emit('loaded', report.value)
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
   } finally {
@@ -132,7 +134,7 @@ onMounted(load)
         </div>
 
         <div v-if="expanded.has(item.resource_id)" class="diff-area">
-          <div class="changed-fields"><b>变化字段</b><span v-for="field in item.changed_fields" :key="field">{{ field }}</span><small v-if="!item.changed_fields.length">内容哈希变化，但白名单结构字段无变化</small></div>
+          <div class="changed-fields"><b>变化字段</b><span v-for="field in item.changed_fields" :key="field">{{ field }}</span><small v-if="!item.changed_fields.length">内容哈希变化，但可展示结构字段无变化</small></div>
           <div class="diff-columns">
             <section><header>V{{ item.current.version_number }} 当前</header><pre>{{ json(item.current.config_preview) }}</pre></section>
             <section><header>V{{ item.latest.version_number }} 最新</header><pre>{{ json(item.latest.config_preview) }}</pre></section>
