@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from uuid import UUID
 
 from fastapi import Cookie, Header, Request
 
@@ -9,13 +10,14 @@ from app.core.errors import ApiError
 from app.governance.store_factory import get_governance_store
 from app.iam.models import Principal
 from app.iam.providers import UpstreamToken
-from app.iam.service import IamService
 from app.session.factory import get_session_store
 from app.session.store import SessionRecord
 
 
 @lru_cache
-def get_iam_service() -> IamService:
+def get_iam_service():
+    from app.iam.service import IamService
+
     return IamService(get_settings())
 
 
@@ -98,11 +100,13 @@ async def require_fresh_mutation_principal(
     await get_session_store().update_principal(record)
     return principal
 
+
 def is_platform_admin(principal: Principal) -> bool:
     settings = get_settings()
     return principal.external_user_id in settings.platform_admin_user_ids or bool(
         set(principal.role_codes) & set(settings.platform_admin_role_codes)
     )
+
 
 async def require_platform_admin(
     request: Request,
@@ -127,45 +131,81 @@ async def require_platform_admin_read(
         raise ApiError(403, "PLATFORM_ADMIN_REQUIRED", "platform administrator role is required")
     return principal
 
+
+async def _definition_resource_id(
+    principal: Principal,
+    resource_type: str,
+    resource_id: str,
+) -> tuple[str | None, str]:
+    """Resolve an immutable version id to its stable definition id when possible."""
+    try:
+        target_id = UUID(resource_id)
+    except (TypeError, ValueError):
+        return None, resource_type
+
+    if resource_type == "MODEL":
+        from app.resources.store_factory import get_resource_store
+
+        try:
+            version = await get_resource_store().get_model_version(target_id, principal)
+        except ApiError as exc:
+            if exc.code == "NOT_FOUND":
+                return None, resource_type
+            raise
+        return str(version.model_id), "MODEL"
+
+    if resource_type in {"DEPLOYMENT", "AGENT", "RUN", "RESOURCE_GRANT"}:
+        return None, resource_type
+
+    from app.resources.registry_factory import get_resource_registry
+
+    try:
+        version = await get_resource_registry().get_version(target_id, principal)
+    except ApiError as exc:
+        if exc.code == "NOT_FOUND":
+            return None, resource_type
+        raise
+    return str(version.resource_id), version.resource_type.value
+
+
 async def ensure_resource_action(principal: Principal, action: str, resource_type: str, resource_id: str) -> None:
-    if is_platform_admin(principal):
+    """Authorize one business-resource action without an admin super-user bypass.
+
+    Platform-admin status controls governance/configuration endpoints; it does
+    not implicitly grant VIEW/USE/RUN on tenant business resources. Existing
+    version-scoped grants remain valid while stable definition-scoped grants are
+    also accepted for versioned AI resources.
+    """
+    governance = get_governance_store()
+    if await governance.is_allowed(principal, action, resource_type, resource_id):
         return
-    if await get_governance_store().is_allowed(principal, action, resource_type, resource_id):
-        return
-    # Descriptors are defined at the resource-definition level while grants are
-    # intentionally version-specific. Resolve either version kind only when an
-    # ownership-based action is requested.
-    if action in {"VIEW", "USE", "EDIT"} and get_settings().storage_mode == "postgres":
+
+    definition_id, actual_type = await _definition_resource_id(principal, resource_type, resource_id)
+    if definition_id and definition_id != resource_id:
+        if await governance.is_allowed(principal, action, actual_type, definition_id):
+            return
+
+    if action in {"VIEW", "USE", "EDIT"} and definition_id and get_settings().storage_mode == "postgres":
         from sqlalchemy import select
-        from app.db.models import ModelVersionRow, ResourceDescriptorRow, ResourceVersionRow
+
+        from app.db.models import ResourceDescriptorRow
         from app.db.rls import set_local_tenant_context
         from app.db.session import get_session_factory
-        from uuid import UUID
-        try:
-            target_id = UUID(resource_id)
-        except ValueError:
-            target_id = None
-        if target_id:
-            async with get_session_factory()() as session:
-                async with session.begin():
-                    await set_local_tenant_context(session, principal.tenant_id, principal.external_user_id)
-                    definition_id = await session.scalar(select(ResourceVersionRow.resource_id).where(
-                        ResourceVersionRow.tenant_id == principal.tenant_id,
-                        ResourceVersionRow.resource_version_id == target_id,
-                    ))
-                    actual_type = resource_type
-                    if definition_id is None:
-                        definition_id = await session.scalar(select(ModelVersionRow.model_id).where(
-                            ModelVersionRow.tenant_id == principal.tenant_id,
-                            ModelVersionRow.model_version_id == target_id,
-                        ))
-                        actual_type = "MODEL"
-                    if definition_id is not None:
-                        owner = await session.scalar(select(ResourceDescriptorRow.owner_user_id).where(
-                            ResourceDescriptorRow.tenant_id == principal.tenant_id,
-                            ResourceDescriptorRow.resource_type == actual_type,
-                            ResourceDescriptorRow.resource_id == definition_id,
-                        ))
-                        if owner == principal.external_user_id:
-                            return
+
+        async with get_session_factory()() as session:
+            async with session.begin():
+                await set_local_tenant_context(session, principal.tenant_id, principal.external_user_id)
+                owner = await session.scalar(select(ResourceDescriptorRow.owner_user_id).where(
+                    ResourceDescriptorRow.tenant_id == principal.tenant_id,
+                    ResourceDescriptorRow.resource_type == actual_type,
+                    ResourceDescriptorRow.resource_id == UUID(definition_id),
+                ))
+                if owner == principal.external_user_id:
+                    return
+
+    # Platform operators may repair lifecycle/governance metadata, but becoming
+    # an administrator must never confer business visibility, use, or run rights.
+    if is_platform_admin(principal) and action in {"EDIT", "PUBLISH", "MANAGE"}:
+        return
+
     raise ApiError(403, "RESOURCE_FORBIDDEN", "resource grant does not allow this action")
