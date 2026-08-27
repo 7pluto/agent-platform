@@ -2,6 +2,8 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import App from './App.vue'
 import DeveloperWorkbench from './pages/developer/DeveloperWorkbench.vue'
+import ExternalCapabilityOnboarding from './pages/developer/ExternalCapabilityOnboarding.vue'
+import ResourcePlayground from './pages/developer/ResourcePlayground.vue'
 
 interface SessionPrincipal {
   external_user_id: string
@@ -25,6 +27,8 @@ const developerWorkspaceActive = ref(true)
 const developerWorkbenchKey = ref(0)
 const installingCommon = ref(false)
 const commonNotice = ref('')
+const onboardingOpen = ref(false)
+const playgroundOpen = ref(false)
 let timer: number | undefined
 
 const isKnownAdmin = computed(() => Boolean(session.value?.principal.role_codes.some(role => role === 'admin' || role === 'agent_admin')))
@@ -36,6 +40,8 @@ async function probeSession() {
       session.value = null
       developerEnabled.value = false
       developerWorkspaceActive.value = true
+      onboardingOpen.value = false
+      playgroundOpen.value = false
       return
     }
     const payload = await response.json() as SessionPayload
@@ -50,6 +56,12 @@ async function probeSession() {
     session.value = null
     developerEnabled.value = false
   }
+}
+
+function resourcesChanged() {
+  developerWorkbenchKey.value += 1
+  commonNotice.value = '资源目录已刷新。新接入能力现在可以进入 Playground 或 Agent Builder。'
+  window.setTimeout(() => { commonNotice.value = '' }, 3600)
 }
 
 async function installCommonResources() {
@@ -86,6 +98,8 @@ async function logoutDeveloper() {
     session.value = null
     developerEnabled.value = false
     developerWorkspaceActive.value = true
+    onboardingOpen.value = false
+    playgroundOpen.value = false
     window.location.assign('/')
   }
 }
@@ -111,6 +125,8 @@ onBeforeUnmount(() => { if (timer !== undefined) window.clearInterval(timer) })
     />
     <div class="root-developer-actions">
       <span v-if="commonNotice" class="common-notice">{{ commonNotice }}</span>
+      <button class="root-workspace-switch onboard" @click="onboardingOpen = true">接入外部能力</button>
+      <button class="root-workspace-switch playground" @click="playgroundOpen = true">Resource Playground</button>
       <button class="root-workspace-switch common" :disabled="installingCommon" @click="installCommonResources">{{ installingCommon ? '正在添加…' : '添加常用资源' }}</button>
       <button class="root-workspace-switch use" @click="developerWorkspaceActive = false">使用工作台</button>
     </div>
@@ -119,6 +135,19 @@ onBeforeUnmount(() => { if (timer !== undefined) window.clearInterval(timer) })
     <App />
     <button v-if="developerEnabled && session" class="root-workspace-switch develop" @click="developerWorkspaceActive = true">开发工作台</button>
   </template>
+
+  <ExternalCapabilityOnboarding
+    v-if="developerEnabled && session && onboardingOpen"
+    :principal="session.principal"
+    :csrf-token="session.csrf_token"
+    @close="onboardingOpen = false"
+    @installed="resourcesChanged"
+  />
+  <ResourcePlayground
+    v-if="developerEnabled && session && playgroundOpen"
+    :csrf-token="session.csrf_token"
+    @close="playgroundOpen = false"
+  />
 </template>
 
 <style scoped>
@@ -142,6 +171,8 @@ onBeforeUnmount(() => { if (timer !== undefined) window.clearInterval(timer) })
 .root-workspace-switch:disabled { opacity: .65; cursor: default; }
 .root-workspace-switch.use { color: #4338ca; background: white; }
 .root-workspace-switch.common { color: white; background: #111827; }
+.root-workspace-switch.onboard { color: white; background: #6941c6; }
+.root-workspace-switch.playground { color: #101828; background: #d1fadf; }
 .root-workspace-switch.develop {
   position: fixed;
   right: 22px;
@@ -151,7 +182,7 @@ onBeforeUnmount(() => { if (timer !== undefined) window.clearInterval(timer) })
   background: #5b4ee5;
 }
 .common-notice {
-  max-width: 320px;
+  max-width: 360px;
   padding: 9px 12px;
   border-radius: 10px;
   background: rgba(17, 24, 39, .94);
@@ -159,7 +190,7 @@ onBeforeUnmount(() => { if (timer !== undefined) window.clearInterval(timer) })
   font-size: 12px;
   box-shadow: 0 10px 28px rgba(16, 24, 40, .18);
 }
-@media (max-width: 720px) {
+@media (max-width: 920px) {
   .root-developer-actions { left: 14px; right: 14px; justify-content: flex-end; flex-wrap: wrap; }
   .common-notice { width: 100%; max-width: none; }
 }
