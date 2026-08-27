@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     ruoyi_dept_path: str = "/agent-iam/departments"
     ruoyi_sub_dept_path: str = "/agent-iam/departments"
     ruoyi_user_search_path: str = "/agent-iam/users"
-    ruoyi_role_search_path: str = "/agent-iam/roles"
+    ruoyi_role_search_path: str = "/system/role/list"
     ruoyi_default_org_id: str = "ruoyi-default"
     ruoyi_timeout_seconds: float = 5.0
     ruoyi_verify_tls: bool = True
