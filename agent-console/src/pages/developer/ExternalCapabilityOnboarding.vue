@@ -5,21 +5,19 @@ interface Principal { external_user_id: string; display_name: string; dept_ids: 
 interface ModelOption { model_id: string; model_version_id: string; display_name: string; version_number: number; provider: string; model_name: string }
 interface DiscoveredTool { name: string; description?: string; input_schema: Record<string, unknown>; managed: boolean }
 
+type Kind = 'MCP' | 'HTTP' | 'DIFY' | 'KNOWLEDGE'
 const props = defineProps<{ principal: Principal; csrfToken: string }>()
 const emit = defineEmits<{ close: []; installed: [] }>()
-type Kind = 'MCP' | 'HTTP' | 'DIFY' | 'KNOWLEDGE'
 const kind = ref<Kind>('MCP')
 const saving = ref(false)
 const error = ref('')
 const notice = ref('')
 const models = ref<ModelOption[]>([])
-
-const common = ref({
-  displayName: '', slug: '', description: '', summary: '', whenUse: '', whenNotUse: '', inputSummary: '', outputSummary: '', tags: '',
-})
-const mcp = ref({ endpoint: 'http://demo-crm-mcp:8090/mcp', apiKey: '', timeout: 10, connectionVersionId: '' })
 const discovered = ref<DiscoveredTool[]>([])
 const selectedMcpTools = ref<string[]>([])
+
+const common = ref({ displayName: '', slug: '', description: '', summary: '', whenUse: '', whenNotUse: '', inputSummary: '', outputSummary: '', tags: '' })
+const mcp = ref({ endpoint: 'http://demo-crm-mcp:8090/mcp', apiKey: '', timeout: 10, connectionVersionId: '' })
 const http = ref({ endpoint: 'http://demo-enterprise-services:8091', path: '/customers/{{customer_id}}', method: 'GET', toolName: 'query_customer_http', inputSchema: '{\n  "type": "object",\n  "properties": {\n    "customer_id": { "type": "string" }\n  },\n  "required": ["customer_id"]\n}', queryTemplate: '{}', bodyTemplate: '', testArguments: '{\n  "customer_id": "C1001"\n}', apiKey: '' })
 const dify = ref({ baseUrl: '', apiKey: '', flowType: 'CHATFLOW', toolName: 'dify_business_flow', testQuery: '请回复 OK' })
 const knowledge = ref({ embeddingModelVersionId: '', files: [] as File[] })
@@ -28,47 +26,25 @@ const tabs = [
   { key: 'MCP' as const, title: 'MCP Server', copy: '发现 Server 提供的工具，再挑选能力纳管成 Tool Resource。' },
   { key: 'HTTP' as const, title: 'HTTP API', copy: '把固定业务 REST API 包装成受控 Tool，不让模型自行拼 URL。' },
   { key: 'DIFY' as const, title: 'Dify', copy: '把已有 Chatflow / Workflow 接成标准 Tool Resource。' },
-  { key: 'KNOWLEDGE' as const, title: 'Knowledge', copy: '上传企业文件，建立本地检索索引并发布 Knowledge Resource。' },
+  { key: 'KNOWLEDGE' as const, title: 'Knowledge', copy: '上传 PDF / DOCX，建立本地检索索引并发布 Knowledge Resource。' },
 ]
-
+const defaults: Record<Kind, { name: string; slug: string; summary: string }> = {
+  MCP: { name: '业务 MCP', slug: 'business-mcp', summary: '通过 MCP 发现并调用业务系统能力' },
+  HTTP: { name: '业务 HTTP Tool', slug: 'business-http-tool', summary: '调用固定企业 HTTP API' },
+  DIFY: { name: 'Dify 业务流', slug: 'dify-business-flow', summary: '调用已有 Dify 应用完成业务任务' },
+  KNOWLEDGE: { name: '企业知识库', slug: 'enterprise-knowledge', summary: '检索上传的企业文档内容' },
+}
 const title = computed(() => tabs.find(item => item.key === kind.value)?.title || kind.value)
+
 function slugify(value: string) { const s = value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 63); return s.length >= 3 ? s : `resource-${Date.now().toString(36)}` }
+function toolInputKeys(tool: DiscoveredTool) { const props = tool.input_schema && typeof tool.input_schema.properties === 'object' && tool.input_schema.properties ? tool.input_schema.properties as Record<string, unknown> : {}; return Object.keys(props).join(', ') || 'no args' }
 function tags() { return common.value.tags.split(',').map(item => item.trim()).filter(Boolean) }
-function semantics() {
-  return {
-    one_line_summary: common.value.summary.trim() || common.value.description.trim() || common.value.displayName.trim(),
-    when_to_use: common.value.whenUse.trim() || '当 Agent 需要调用该业务能力时使用。',
-    ...(common.value.whenNotUse.trim() ? { when_not_to_use: common.value.whenNotUse.trim() } : {}),
-    input_summary: common.value.inputSummary.trim() || '按能力输入契约提供参数。',
-    output_summary: common.value.outputSummary.trim() || '返回业务系统提供的结构化结果。',
-    risk_level: 'LOW', read_only: true, tags: tags(), publication_scope: 'PERSONAL', publication_subjects: [],
-  }
-}
-function baseIdentity() {
-  const display = common.value.displayName.trim() || `${title.value} 能力`
-  return { display_name: display, slug: common.value.slug.trim() || slugify(display), description: common.value.description.trim() || semantics().one_line_summary }
-}
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const headers = new Headers(init.headers || {})
-  if (init.method && init.method !== 'GET') headers.set('X-CSRF-Token', props.csrfToken)
-  if (init.body && !(init.body instanceof FormData)) headers.set('Content-Type', 'application/json')
-  const response = await fetch(path, { credentials: 'same-origin', ...init, headers })
-  const payload = await response.json().catch(() => ({})) as Record<string, unknown>
-  if (!response.ok) throw new Error(String(payload.message || payload.detail || payload.code || `HTTP ${response.status}`))
-  return payload as T
-}
-function parseObject(value: string, field: string, allowEmpty = true) {
-  if (!value.trim() && allowEmpty) return undefined
-  try { const parsed = JSON.parse(value); if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new Error(); return parsed as Record<string, unknown> }
-  catch { throw new Error(`${field} 必须是 JSON Object。`) }
-}
-function selectKind(value: Kind) {
-  kind.value = value; error.value = ''; notice.value = ''; discovered.value = []; selectedMcpTools.value = []
-  if (!common.value.displayName) {
-    const defaults: Record<Kind, [string, string]> = { MCP: ['业务 MCP', '通过 MCP 发现并调用业务系统能力'], HTTP: ['业务 HTTP Tool', '调用固定企业 HTTP API'], DIFY: ['Dify 业务流', '调用已有 Dify 应用完成业务任务'], KNOWLEDGE: ['企业知识库', '检索上传的企业文档内容'] }
-    common.value.displayName = defaults[value][0]; common.value.summary = defaults[value][1]; common.value.slug = slugify(defaults[value][0])
-  }
-}
+function semantics() { return { one_line_summary: common.value.summary.trim() || common.value.description.trim() || common.value.displayName.trim(), when_to_use: common.value.whenUse.trim() || '当 Agent 需要调用该业务能力时使用。', ...(common.value.whenNotUse.trim() ? { when_not_to_use: common.value.whenNotUse.trim() } : {}), input_summary: common.value.inputSummary.trim() || '按能力输入契约提供参数。', output_summary: common.value.outputSummary.trim() || '返回业务系统提供的结构化结果。', risk_level: 'LOW', read_only: true, tags: tags(), publication_scope: 'PERSONAL', publication_subjects: [] } }
+function baseIdentity() { const display = common.value.displayName.trim() || `${title.value} 能力`; return { display_name: display, slug: common.value.slug.trim() || slugify(display), description: common.value.description.trim() || semantics().one_line_summary } }
+function resetProductInfo(value: Kind) { const item = defaults[value]; common.value = { displayName: item.name, slug: item.slug, description: '', summary: item.summary, whenUse: '', whenNotUse: '', inputSummary: '', outputSummary: '', tags: '' } }
+function selectKind(value: Kind) { kind.value = value; error.value = ''; notice.value = ''; discovered.value = []; selectedMcpTools.value = []; mcp.value.connectionVersionId = ''; resetProductInfo(value) }
+function parseObject(value: string, field: string, allowEmpty = true) { if (!value.trim() && allowEmpty) return undefined; try { const parsed = JSON.parse(value); if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new Error(); return parsed as Record<string, unknown> } catch { throw new Error(`${field} 必须是 JSON Object。`) } }
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> { const headers = new Headers(init.headers || {}); if (init.method && init.method !== 'GET') headers.set('X-CSRF-Token', props.csrfToken); if (init.body && !(init.body instanceof FormData)) headers.set('Content-Type', 'application/json'); const response = await fetch(path, { credentials: 'same-origin', ...init, headers }); const payload = await response.json().catch(() => ({})) as Record<string, unknown>; if (!response.ok) throw new Error(String(payload.message || payload.detail || payload.code || `HTTP ${response.status}`)); return payload as T }
 async function loadModels() { try { models.value = await request<ModelOption[]>('/api/v1/developer/external/models') } catch { models.value = [] } }
 
 async function connectMcp() {
@@ -86,7 +62,7 @@ async function registerMcpTools() {
   saving.value = true; error.value = ''; notice.value = ''
   try {
     const items = discovered.value.filter(item => selectedMcpTools.value.includes(item.name))
-    await request('/api/v1/developer/external/mcp/tools', { method: 'POST', body: JSON.stringify({ connection_version_id: mcp.value.connectionVersionId, tools: items.map(item => ({ tool_name: item.name, slug: slugify(`mcp-${item.name}`), display_name: item.name.replace(/_/g, ' '), description: item.description || `MCP Tool ${item.name}`, one_line_summary: item.description || `调用 MCP Tool ${item.name}`, when_to_use: common.value.whenUse.trim() || `需要 ${item.description || item.name} 时使用。`, when_not_to_use: common.value.whenNotUse.trim() || '与该业务动作无关时不要使用。', input_summary: `按 MCP input schema 提供参数：${Object.keys((item.input_schema?.properties as Record<string, unknown>) || {}).join('、') || '无固定参数'}`, output_summary: common.value.outputSummary.trim() || '返回 MCP Server 的结构化结果。', risk_level: 'LOW', read_only: true, tags: tags() })) }) })
+    await request('/api/v1/developer/external/mcp/tools', { method: 'POST', body: JSON.stringify({ connection_version_id: mcp.value.connectionVersionId, tools: items.map(item => ({ tool_name: item.name, slug: slugify(`mcp-${item.name}`), display_name: item.name.replace(/_/g, ' '), description: item.description || `MCP Tool ${item.name}`, one_line_summary: item.description || `调用 MCP Tool ${item.name}`, when_to_use: common.value.whenUse.trim() || `需要 ${item.description || item.name} 时使用。`, when_not_to_use: common.value.whenNotUse.trim() || '与该业务动作无关时不要使用。', input_summary: `按 MCP input schema 提供参数：${toolInputKeys(item)}`, output_summary: common.value.outputSummary.trim() || '返回 MCP Server 的结构化结果。', risk_level: 'LOW', read_only: true, tags: tags() })) }) })
     notice.value = `已纳管 ${items.length} 个 MCP Tool，可在“可用资源”和 Playground 中直接使用。`; emit('installed')
   } catch (err) { error.value = err instanceof Error ? err.message : String(err) } finally { saving.value = false }
 }
@@ -103,57 +79,50 @@ async function createHttp() {
 }
 async function createDify() {
   saving.value = true; error.value = ''; notice.value = ''
-  try {
-    await request('/api/v1/developer/external/dify', { method: 'POST', body: JSON.stringify({ ...baseIdentity(), ...semantics(), flow_type: dify.value.flowType, base_url: dify.value.baseUrl.trim(), api_key: dify.value.apiKey.trim(), tool_name: dify.value.toolName.trim(), test_query: dify.value.testQuery.trim() || '请回复 OK' }) })
-    notice.value = 'Dify 应用连接测试成功并已纳管为 Tool Resource。'; emit('installed')
-  } catch (err) { error.value = err instanceof Error ? err.message : String(err) } finally { saving.value = false }
+  try { await request('/api/v1/developer/external/dify', { method: 'POST', body: JSON.stringify({ ...baseIdentity(), ...semantics(), flow_type: dify.value.flowType, base_url: dify.value.baseUrl.trim(), api_key: dify.value.apiKey.trim(), tool_name: dify.value.toolName.trim(), test_query: dify.value.testQuery.trim() || '请回复 OK' }) }); notice.value = 'Dify 应用连接测试成功并已纳管为 Tool Resource。'; emit('installed') }
+  catch (err) { error.value = err instanceof Error ? err.message : String(err) } finally { saving.value = false }
 }
 function onFiles(event: Event) { knowledge.value.files = Array.from((event.target as HTMLInputElement).files || []) }
 async function createKnowledge() {
   if (!knowledge.value.embeddingModelVersionId) { error.value = '请选择可用的 Embedding Model。'; return }
-  if (!knowledge.value.files.length) { error.value = '请至少选择一个知识文件。'; return }
+  if (!knowledge.value.files.length) { error.value = '请至少选择一个 PDF 或 DOCX 文件。'; return }
   saving.value = true; error.value = ''; notice.value = ''
   try {
     const created = await request<{ resource_version: { resource_version_id: string } }>('/api/v1/developer/external/knowledge/local', { method: 'POST', body: JSON.stringify({ ...baseIdentity(), ...semantics(), embedding_model_version_id: knowledge.value.embeddingModelVersionId }) })
     const versionId = created.resource_version.resource_version_id
-    for (const file of knowledge.value.files) {
-      const data = new FormData(); data.append('file', file)
-      await request(`/api/v1/developer/external/knowledge/${versionId}/documents`, { method: 'POST', body: data })
-    }
+    for (const file of knowledge.value.files) { const data = new FormData(); data.append('file', file); await request(`/api/v1/developer/external/knowledge/${versionId}/documents`, { method: 'POST', body: data }) }
     const job = await request<{ job_id: string; status: string }>(`/api/v1/developer/external/knowledge/${versionId}/build`, { method: 'POST' })
     notice.value = `Knowledge 已发布并上传 ${knowledge.value.files.length} 个文件，索引任务 ${job.job_id.slice(0, 8)}… 已进入 ${job.status}。`; emit('installed')
   } catch (err) { error.value = err instanceof Error ? err.message : String(err) } finally { saving.value = false }
 }
-onMounted(() => { void loadModels(); selectKind('MCP') })
+
+onMounted(() => { void loadModels(); resetProductInfo('MCP') })
 </script>
 
 <template>
-  <div class="overlay">
-    <main class="panel">
-      <header class="panel-head"><div><span>DEVELOPER CAPABILITY ONBOARDING</span><h1>接入外部能力</h1><p>外部系统只是来源；接入完成后统一沉淀成可版本化、可授权、可测试的 Tool / Knowledge Resource。</p></div><button class="close" @click="emit('close')">×</button></header>
-      <section class="kind-grid"><button v-for="tab in tabs" :key="tab.key" :class="{active:kind===tab.key}" @click="selectKind(tab.key)"><b>{{tab.title}}</b><span>{{tab.copy}}</span></button></section>
-      <p v-if="error" class="message error">{{error}}</p><p v-if="notice" class="message success">{{notice}}</p>
-      <section class="workspace">
-        <aside><p>RESOURCE PRODUCT INFO</p><h3>{{title}}</h3><label>资源名称<input v-model="common.displayName"/></label><label>Slug<input v-model="common.slug"/></label><label>一句话能力<textarea v-model="common.summary" rows="2"/></label><label>何时使用<textarea v-model="common.whenUse" rows="3"/></label><label>何时不要使用<textarea v-model="common.whenNotUse" rows="2"/></label><label>输入说明<textarea v-model="common.inputSummary" rows="2"/></label><label>输出说明<textarea v-model="common.outputSummary" rows="2"/></label><label>标签<input v-model="common.tags" placeholder="CRM, 查询, 只读"/></label></aside>
-        <div class="technical">
-          <template v-if="kind==='MCP'">
-            <div class="section-title"><span>01</span><div><b>连接 MCP Server</b><small>仅支持 Streamable HTTP；连接后先真实执行 tools/list。</small></div></div>
-            <div class="form-grid"><label class="wide">Endpoint<input v-model="mcp.endpoint" placeholder="https://mcp.company.com/mcp"/></label><label>Timeout (s)<input v-model.number="mcp.timeout" type="number"/></label><label>API Key（可选）<input v-model="mcp.apiKey" type="password"/></label></div><button class="primary" :disabled="saving" @click="connectMcp">{{saving?'正在连接…':'连接并发现 Tool'}}</button>
-            <template v-if="discovered.length"><div class="section-title second"><span>02</span><div><b>选择要纳管的 Tool</b><small>Schema 来自 Server discovery，浏览器不能伪造。</small></div></div><div class="tool-list"><label v-for="tool in discovered" :key="tool.name" :class="{disabled:tool.managed}"><input v-model="selectedMcpTools" type="checkbox" :value="tool.name" :disabled="tool.managed"/><span><b>{{tool.name}}</b><small>{{tool.description||'无描述'}}</small><code>{{Object.keys((tool.input_schema?.properties as Record<string,unknown>)||{}).join(', ')||'no args'}}</code></span><em>{{tool.managed?'已纳管':'可纳管'}}</em></label></div><button class="primary dark" :disabled="saving||!selectedMcpTools.length" @click="registerMcpTools">纳管 {{selectedMcpTools.length}} 个 Tool</button></template>
-          </template>
-          <template v-else-if="kind==='HTTP'">
-            <div class="section-title"><span>01</span><div><b>定义固定 HTTP 能力</b><small>模型只能填写 Schema 参数，不能改变 Endpoint、Method 或认证。</small></div></div><div class="form-grid"><label>Endpoint<input v-model="http.endpoint"/></label><label>Path<input v-model="http.path"/></label><label>Method<select v-model="http.method"><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option></select></label><label>Tool Name<input v-model="http.toolName"/></label><label class="wide code">Input Schema<textarea v-model="http.inputSchema" rows="9"/></label><label class="wide code">Query Template<textarea v-model="http.queryTemplate" rows="4"/></label><label class="wide code">Body Template（可空）<textarea v-model="http.bodyTemplate" rows="5"/></label><label class="wide code">Test Arguments<textarea v-model="http.testArguments" rows="5"/></label><label class="wide">API Key（可选）<input v-model="http.apiKey" type="password"/></label></div><button class="primary dark" :disabled="saving" @click="createHttp">{{saving?'正在测试…':'测试并发布 HTTP Tool'}}</button>
-          </template>
-          <template v-else-if="kind==='DIFY'">
-            <div class="section-title"><span>01</span><div><b>接入 Dify App</b><small>平台会先读取应用参数并做连接测试，再生成标准 Tool Resource。</small></div></div><div class="form-grid"><label class="wide">Base URL<input v-model="dify.baseUrl" placeholder="https://api.dify.ai/v1"/></label><label>Flow Type<select v-model="dify.flowType"><option value="CHATFLOW">CHATFLOW</option><option value="WORKFLOW">WORKFLOW</option></select></label><label>Tool Name<input v-model="dify.toolName"/></label><label class="wide">API Key<input v-model="dify.apiKey" type="password"/></label><label class="wide">测试问题<input v-model="dify.testQuery"/></label></div><button class="primary dark" :disabled="saving||!dify.apiKey" @click="createDify">{{saving?'正在检查…':'连接并发布 Dify Tool'}}</button>
-          </template>
-          <template v-else>
-            <div class="section-title"><span>01</span><div><b>创建本地 Knowledge</b><small>选择已授权的 Embedding Model，上传文件后自动进入索引任务。</small></div></div><div v-if="!models.length" class="warning">当前账号没有可用 Model。请先让管理员发布并授权一个可用于 Embedding 的 Model Version。</div><div class="form-grid"><label class="wide">Embedding Model<select v-model="knowledge.embeddingModelVersionId"><option value="">请选择</option><option v-for="model in models" :key="model.model_version_id" :value="model.model_version_id">{{model.display_name}} · V{{model.version_number}} · {{model.model_name}}</option></select></label><label class="wide file">知识文件<input type="file" multiple accept=".pdf,.doc,.docx,.txt,.md,.csv,.xlsx" @change="onFiles"/><span>{{knowledge.files.length?`已选择 ${knowledge.files.length} 个文件`:'支持项目当前知识处理链可解析的文档格式'}}</span></label></div><button class="primary dark" :disabled="saving||!models.length" @click="createKnowledge">{{saving?'正在创建与上传…':'创建 Knowledge 并建立索引'}}</button>
-          </template>
-        </div>
-      </section>
-    </main>
-  </div>
+  <div class="overlay"><main class="panel">
+    <header class="panel-head"><div><span>DEVELOPER CAPABILITY ONBOARDING</span><h1>接入外部能力</h1><p>外部系统只是来源；接入完成后统一沉淀成可版本化、可授权、可测试的 Tool / Knowledge Resource。</p></div><button class="close" @click="emit('close')">×</button></header>
+    <section class="kind-grid"><button v-for="tab in tabs" :key="tab.key" :class="{active:kind===tab.key}" @click="selectKind(tab.key)"><b>{{tab.title}}</b><span>{{tab.copy}}</span></button></section>
+    <p v-if="error" class="message error">{{error}}</p><p v-if="notice" class="message success">{{notice}}</p>
+    <section class="workspace"><aside><p>RESOURCE PRODUCT INFO</p><h3>{{title}}</h3><label>资源名称<input v-model="common.displayName"/></label><label>Slug<input v-model="common.slug"/></label><label>一句话能力<textarea v-model="common.summary" rows="2"/></label><label>何时使用<textarea v-model="common.whenUse" rows="3"/></label><label>何时不要使用<textarea v-model="common.whenNotUse" rows="2"/></label><label>输入说明<textarea v-model="common.inputSummary" rows="2"/></label><label>输出说明<textarea v-model="common.outputSummary" rows="2"/></label><label>标签<input v-model="common.tags" placeholder="CRM, 查询, 只读"/></label></aside>
+      <div class="technical">
+        <template v-if="kind==='MCP'">
+          <div class="section-title"><span>01</span><div><b>连接 MCP Server</b><small>仅支持 Streamable HTTP；连接后先真实执行 tools/list。</small></div></div>
+          <div class="form-grid"><label class="wide">Endpoint<input v-model="mcp.endpoint" placeholder="https://mcp.company.com/mcp"/></label><label>Timeout (s)<input v-model.number="mcp.timeout" type="number"/></label><label>API Key（可选）<input v-model="mcp.apiKey" type="password"/></label></div><button class="primary" :disabled="saving" @click="connectMcp">{{saving?'正在连接…':'连接并发现 Tool'}}</button>
+          <template v-if="discovered.length"><div class="section-title second"><span>02</span><div><b>选择要纳管的 Tool</b><small>Schema 来自 Server discovery，浏览器不能伪造。</small></div></div><div class="tool-list"><label v-for="tool in discovered" :key="tool.name" :class="{disabled:tool.managed}"><input v-model="selectedMcpTools" type="checkbox" :value="tool.name" :disabled="tool.managed"/><span><b>{{tool.name}}</b><small>{{tool.description||'无描述'}}</small><code>{{toolInputKeys(tool)}}</code></span><em>{{tool.managed?'已纳管':'可纳管'}}</em></label></div><button class="primary dark" :disabled="saving||!selectedMcpTools.length" @click="registerMcpTools">纳管 {{selectedMcpTools.length}} 个 Tool</button></template>
+        </template>
+        <template v-else-if="kind==='HTTP'">
+          <div class="section-title"><span>01</span><div><b>定义固定 HTTP 能力</b><small>模型只能填写 Schema 参数，不能改变 Endpoint、Method 或认证。</small></div></div><div class="form-grid"><label>Endpoint<input v-model="http.endpoint"/></label><label>Path<input v-model="http.path"/></label><label>Method<select v-model="http.method"><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option></select></label><label>Tool Name<input v-model="http.toolName"/></label><label class="wide code">Input Schema<textarea v-model="http.inputSchema" rows="9"/></label><label class="wide code">Query Template<textarea v-model="http.queryTemplate" rows="4"/></label><label class="wide code">Body Template（可空）<textarea v-model="http.bodyTemplate" rows="5"/></label><label class="wide code">Test Arguments<textarea v-model="http.testArguments" rows="5"/></label><label class="wide">API Key（可选）<input v-model="http.apiKey" type="password"/></label></div><button class="primary dark" :disabled="saving" @click="createHttp">{{saving?'正在测试…':'测试并发布 HTTP Tool'}}</button>
+        </template>
+        <template v-else-if="kind==='DIFY'">
+          <div class="section-title"><span>01</span><div><b>接入 Dify App</b><small>平台会先读取应用参数并做连接测试，再生成标准 Tool Resource。</small></div></div><div class="form-grid"><label class="wide">Base URL<input v-model="dify.baseUrl" placeholder="https://api.dify.ai/v1"/></label><label>Flow Type<select v-model="dify.flowType"><option value="CHATFLOW">CHATFLOW</option><option value="WORKFLOW">WORKFLOW</option></select></label><label>Tool Name<input v-model="dify.toolName"/></label><label class="wide">API Key<input v-model="dify.apiKey" type="password"/></label><label class="wide">测试问题<input v-model="dify.testQuery"/></label></div><button class="primary dark" :disabled="saving||!dify.apiKey" @click="createDify">{{saving?'正在检查…':'连接并发布 Dify Tool'}}</button>
+        </template>
+        <template v-else>
+          <div class="section-title"><span>01</span><div><b>创建本地 Knowledge</b><small>选择已授权的 Embedding Model，上传 PDF / DOCX 后自动进入索引任务。</small></div></div><div v-if="!models.length" class="warning">当前账号没有可用 Model。请先让管理员发布并授权一个可用于 Embedding 的 Model Version。</div><div class="form-grid"><label class="wide">Embedding Model<select v-model="knowledge.embeddingModelVersionId"><option value="">请选择</option><option v-for="model in models" :key="model.model_version_id" :value="model.model_version_id">{{model.display_name}} · V{{model.version_number}} · {{model.model_name}}</option></select></label><label class="wide file">知识文件<input type="file" multiple accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" @change="onFiles"/><span>{{knowledge.files.length?`已选择 ${knowledge.files.length} 个文件`:'当前知识处理链仅支持 PDF / DOCX'}}</span></label></div><button class="primary dark" :disabled="saving||!models.length" @click="createKnowledge">{{saving?'正在创建与上传…':'创建 Knowledge 并建立索引'}}</button>
+        </template>
+      </div>
+    </section>
+  </main></div>
 </template>
 
 <style scoped>
