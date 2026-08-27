@@ -75,6 +75,14 @@ async def apply_product_governance(
     source_ref: str | None,
     principal: Principal,
 ) -> list[ResourceGrantRecord]:
+    """Persist product metadata and definition-scoped grants.
+
+    Authorization belongs to the logical business resource. Agent versions and
+    manifests still pin immutable resource-version IDs for reproducibility, but
+    upgrading a resource from V1 to V2 must not require duplicating the same
+    RuoYi USER/ROLE/DEPT grant. The version id is intentionally accepted here
+    for audit/caller compatibility but is not the grant target.
+    """
     subjects = resolve_publication_subjects(product)
     if get_settings().storage_mode == "postgres":
         values = {
@@ -123,7 +131,7 @@ async def apply_product_governance(
             subject_type=subject_type,
             subject_id=subject_id,
             resource_type=resource_type,
-            resource_id=str(resource_version_id),
+            resource_id=str(resource_id),
             actions=actions,
             effect=GrantEffect.ALLOW,
         ), principal))
