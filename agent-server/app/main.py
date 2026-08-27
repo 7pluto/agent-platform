@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import auth, common_mcp, common_resources, control_plane, conversations, discovery, developer_dependency_upgrades, developer_external_capabilities, developer_playground, developer_resources, governance, resources, resource_registry, knowledge, memory, mcp, health, iam, runs, secrets, workbench, revision_history, ragflow
+from app.api.routes import auth, common_mcp, common_resources, control_plane, conversations, discovery, developer_dependency_upgrades, developer_external_capabilities, developer_knowledge_ops, developer_playground, developer_resources, governance, resources, resource_registry, knowledge, memory, mcp, health, iam, runs, secrets, workbench, revision_history, ragflow
 from app.config import get_settings
 from app.core.errors import ApiError, api_error_handler
 from app.api.dependencies import get_iam_service
@@ -44,6 +44,7 @@ app.include_router(resource_registry.router, prefix=settings.api_prefix)
 app.include_router(developer_resources.router, prefix=settings.api_prefix)
 app.include_router(developer_dependency_upgrades.router, prefix=settings.api_prefix)
 app.include_router(developer_external_capabilities.router, prefix=settings.api_prefix)
+app.include_router(developer_knowledge_ops.router, prefix=settings.api_prefix)
 app.include_router(developer_playground.router, prefix=settings.api_prefix)
 app.include_router(common_resources.router, prefix=settings.api_prefix)
 app.include_router(discovery.router, prefix=settings.api_prefix)
