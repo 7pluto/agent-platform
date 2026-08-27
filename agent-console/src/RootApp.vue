@@ -16,6 +16,7 @@ interface SessionPayload {
 
 const session = ref<SessionPayload | null>(null)
 const developerEnabled = ref(false)
+const developerWorkspaceActive = ref(true)
 let timer: number | undefined
 
 const isKnownAdmin = computed(() => Boolean(session.value?.principal.role_codes.some(role => role === 'admin' || role === 'agent_admin')))
@@ -26,6 +27,7 @@ async function probeSession() {
     if (!response.ok) {
       session.value = null
       developerEnabled.value = false
+      developerWorkspaceActive.value = true
       return
     }
     const payload = await response.json() as SessionPayload
@@ -53,6 +55,7 @@ async function logoutDeveloper() {
   } finally {
     session.value = null
     developerEnabled.value = false
+    developerWorkspaceActive.value = true
     window.location.assign('/')
   }
 }
@@ -69,11 +72,33 @@ onBeforeUnmount(() => { if (timer !== undefined) window.clearInterval(timer) })
 </script>
 
 <template>
-  <DeveloperWorkbench
-    v-if="developerEnabled && session"
-    :principal="session.principal"
-    :csrf-token="session.csrf_token"
-    @logout="logoutDeveloper"
-  />
-  <App v-else />
+  <template v-if="developerEnabled && session && developerWorkspaceActive">
+    <DeveloperWorkbench
+      :principal="session.principal"
+      :csrf-token="session.csrf_token"
+      @logout="logoutDeveloper"
+    />
+    <button class="root-workspace-switch use" @click="developerWorkspaceActive = false">使用工作台</button>
+  </template>
+  <template v-else>
+    <App />
+    <button v-if="developerEnabled && session" class="root-workspace-switch develop" @click="developerWorkspaceActive = true">开发工作台</button>
+  </template>
 </template>
+
+<style scoped>
+.root-workspace-switch {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  z-index: 80;
+  border: 0;
+  border-radius: 999px;
+  padding: 11px 16px;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 10px 28px rgba(16, 24, 40, .18);
+}
+.root-workspace-switch.use { color: #4338ca; background: white; }
+.root-workspace-switch.develop { color: white; background: #5b4ee5; }
+</style>
