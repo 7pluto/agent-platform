@@ -45,6 +45,16 @@ services:
     expose:
       - "8090"
 
+  demo-ticket-mcp:
+    build: ./demo-ticket-mcp
+    expose:
+      - "8092"
+
+  demo-ops-mcp:
+    build: ./demo-ops-mcp
+    expose:
+      - "8093"
+
   demo-enterprise-services:
     build: ./demo-enterprise-services
     expose:
@@ -82,6 +92,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      demo-crm-mcp:
+        condition: service_started
+      demo-ticket-mcp:
+        condition: service_started
+      demo-ops-mcp:
+        condition: service_started
       agent-migrate:
         condition: service_completed_successfully
     ports:
@@ -99,6 +115,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      demo-crm-mcp:
+        condition: service_started
+      demo-ticket-mcp:
+        condition: service_started
+      demo-ops-mcp:
+        condition: service_started
       agent-migrate:
         condition: service_completed_successfully
     networks:
