@@ -91,7 +91,7 @@ def test_revision_history_keeps_publication_snapshot_without_backfilling_old_rev
         assert by_id[revision3_id]["publication"]["available"] is True
         assert by_id[revision3_id]["publication"]["scope"] == "SELECTED_SUBJECTS"
         assert {f"{item['subject_type']}:{item['subject_id']}" for item in by_id[revision3_id]["publication"]["subjects"]} >= {
-            "USER:admin",
+            "USER:user-demo",
             "ROLE:agent_admin",
         }
         assert by_id[revision3_id]["active"] is True
