@@ -21,17 +21,17 @@ interface ReleaseChange extends DependencyChange {
   dependencyChanges: DependencyChange[]
 }
 
-const fields: Array<{ type: string; field: string; many: boolean }> = [
-  { type: 'MODEL', field: 'model_version_id', many: false },
-  { type: 'PROMPT', field: 'prompt_version_id', many: false },
-  { type: 'SKILL', field: 'skill_version_ids', many: true },
-  { type: 'TOOL', field: 'tool_version_ids', many: true },
-  { type: 'KNOWLEDGE', field: 'knowledge_version_ids', many: true },
-  { type: 'MEMORY_POLICY', field: 'memory_policy_version_id', many: false },
+const fields: Array<{ field: string; many: boolean }> = [
+  { field: 'model_version_id', many: false },
+  { field: 'prompt_version_id', many: false },
+  { field: 'skill_version_ids', many: true },
+  { field: 'tool_version_ids', many: true },
+  { field: 'knowledge_version_ids', many: true },
+  { field: 'memory_policy_version_id', many: false },
 ]
 
-const byVersionId = computed(() => new Map(props.catalog.map(item => [item.version_id, item])))
-const baselineByVersionId = computed(() => new Map(props.baseline.map(item => [item.version_id, item])))
+const byVersionId = computed(() => new Map<string, CatalogItem>(props.catalog.map(item => [item.version_id, item] as const)))
+const baselineByVersionId = computed(() => new Map<string, CatalogItem>(props.baseline.map(item => [item.version_id, item] as const)))
 
 function currentVersionIds(): string[] {
   const result: string[] = []
@@ -56,9 +56,9 @@ function dependencyChanges(before: CatalogItem, after: CatalogItem): DependencyC
   if (before.resource_type !== 'SKILL' || after.resource_type !== 'SKILL') return []
   const beforeItems = before.dependencies.map(id => byVersionId.value.get(id) || baselineByVersionId.value.get(id)).filter(Boolean) as CatalogItem[]
   const afterItems = after.dependencies.map(id => byVersionId.value.get(id) || baselineByVersionId.value.get(id)).filter(Boolean) as CatalogItem[]
-  const beforeMap = new Map(beforeItems.map(item => [item.resource_id, item]))
-  const afterMap = new Map(afterItems.map(item => [item.resource_id, item]))
-  const ids = new Set([...beforeMap.keys(), ...afterMap.keys()])
+  const beforeMap = new Map<string, CatalogItem>(beforeItems.map(item => [item.resource_id, item] as const))
+  const afterMap = new Map<string, CatalogItem>(afterItems.map(item => [item.resource_id, item] as const))
+  const ids = new Set<string>([...beforeMap.keys(), ...afterMap.keys()])
   const result: DependencyChange[] = []
   for (const id of ids) {
     const oldItem = beforeMap.get(id)
@@ -74,9 +74,9 @@ function dependencyChanges(before: CatalogItem, after: CatalogItem): DependencyC
 }
 
 const changes = computed<ReleaseChange[]>(() => {
-  const beforeMap = new Map(props.baseline.map(item => [keyOf(item), item]))
-  const afterMap = new Map(currentCapabilities.value.map(item => [keyOf(item), item]))
-  const keys = new Set([...beforeMap.keys(), ...afterMap.keys()])
+  const beforeMap = new Map<string, CatalogItem>(props.baseline.map(item => [keyOf(item), item] as const))
+  const afterMap = new Map<string, CatalogItem>(currentCapabilities.value.map(item => [keyOf(item), item] as const))
+  const keys = new Set<string>([...beforeMap.keys(), ...afterMap.keys()])
   const result: ReleaseChange[] = []
   for (const key of keys) {
     const before = beforeMap.get(key)
@@ -93,7 +93,7 @@ const changes = computed<ReleaseChange[]>(() => {
 })
 
 const unchangedCount = computed(() => {
-  const before = new Map(props.baseline.map(item => [keyOf(item), item.version_id]))
+  const before = new Map<string, string>(props.baseline.map(item => [keyOf(item), item.version_id] as const))
   return currentCapabilities.value.filter(item => before.get(keyOf(item)) === item.version_id).length
 })
 const indirectChangeCount = computed(() => changes.value.reduce((sum, item) => sum + item.dependencyChanges.length, 0))
@@ -121,7 +121,7 @@ function routeLabel(change: DependencyChange) {
     <div v-if="!changes.length" class="no-change"><b>资源版本没有变化</b><span>{{ unchangedCount }} 项能力保持原版本。若你只调整了可用范围或运行策略，仍可继续发布。</span></div>
 
     <div v-else class="change-grid">
-      <article v-for="change in changes" :key="`${change.resourceType}:${change.displayName}`" :class="['change-card', change.kind.toLowerCase()]">
+      <article v-for="change in changes" :key="`${change.resourceType}:${change.before?.resource_id || change.after?.resource_id || change.displayName}`" :class="['change-card', change.kind.toLowerCase()]">
         <div class="change-heading"><span>{{ typeLabel(change.resourceType) }}</span><em>{{ kindLabel(change.kind) }}</em></div>
         <h4>{{ change.displayName }}</h4>
         <div class="version-route">
@@ -133,7 +133,7 @@ function routeLabel(change: DependencyChange) {
 
         <section v-if="change.dependencyChanges.length" class="dependency-changes">
           <b>这个 Skill 同时改变了依赖</b>
-          <div v-for="dependency in change.dependencyChanges" :key="`${dependency.resourceType}:${dependency.displayName}`">
+          <div v-for="dependency in change.dependencyChanges" :key="`${dependency.resourceType}:${dependency.before?.resource_id || dependency.after?.resource_id || dependency.displayName}`">
             <span>{{ typeLabel(dependency.resourceType) }} · {{ dependency.displayName }}</span>
             <em :class="dependency.kind.toLowerCase()">{{ kindLabel(dependency.kind) }} · {{ routeLabel(dependency) }}</em>
           </div>
